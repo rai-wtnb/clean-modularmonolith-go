@@ -1,0 +1,10 @@
+go 1.26.0
+
+use (
+	./cmd/server
+	./internal/platform
+	./modules/notifications
+	./modules/orders
+	./modules/shared
+	./modules/users
+)
