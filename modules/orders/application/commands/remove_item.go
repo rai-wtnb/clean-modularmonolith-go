@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
-	"github.com/rai/clean-modularmonolith-go/modules/shared/types"
 )
 
 // RemoveItemCommand removes an item from an order.
@@ -23,7 +22,7 @@ func NewRemoveItemHandler(repo domain.OrderRepository) *RemoveItemHandler {
 }
 
 func (h *RemoveItemHandler) Handle(ctx context.Context, cmd RemoveItemCommand) error {
-	orderID, err := types.ParseOrderID(cmd.OrderID)
+	orderID, err := domain.ParseOrderID(cmd.OrderID)
 	if err != nil {
 		return fmt.Errorf("invalid order ID: %w", err)
 	}

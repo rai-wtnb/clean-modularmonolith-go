@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
-	"github.com/rai/clean-modularmonolith-go/modules/shared/types"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
@@ -30,7 +29,7 @@ func NewDeleteUserHandler(repo domain.UserRepository, publisher events.Publisher
 // Handle executes the delete user use case.
 func (h *DeleteUserHandler) Handle(ctx context.Context, cmd DeleteUserCommand) error {
 	// Parse user ID
-	userID, err := types.ParseUserID(cmd.UserID)
+	userID, err := domain.ParseUserID(cmd.UserID)
 	if err != nil {
 		return fmt.Errorf("invalid user ID: %w", err)
 	}

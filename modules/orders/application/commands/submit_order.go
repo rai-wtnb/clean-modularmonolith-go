@@ -6,7 +6,6 @@ import (
 
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
-	"github.com/rai/clean-modularmonolith-go/modules/shared/types"
 )
 
 // SubmitOrderCommand submits an order for processing.
@@ -24,7 +23,7 @@ func NewSubmitOrderHandler(repo domain.OrderRepository, publisher events.Publish
 }
 
 func (h *SubmitOrderHandler) Handle(ctx context.Context, cmd SubmitOrderCommand) error {
-	orderID, err := types.ParseOrderID(cmd.OrderID)
+	orderID, err := domain.ParseOrderID(cmd.OrderID)
 	if err != nil {
 		return fmt.Errorf("invalid order ID: %w", err)
 	}

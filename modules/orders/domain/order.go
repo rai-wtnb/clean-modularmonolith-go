@@ -4,16 +4,16 @@ package domain
 import (
 	"time"
 
-	"github.com/rai/clean-modularmonolith-go/modules/shared/types"
+	userdomain "github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
 // Order is the aggregate root for the order bounded context.
 type Order struct {
-	id        types.OrderID
-	userID    types.UserID
+	id        OrderID
+	userID    userdomain.UserID
 	items     []OrderItem
 	status    Status
-	total     types.Money
+	total     Money
 	createdAt time.Time
 	updatedAt time.Time
 }
@@ -23,21 +23,21 @@ type OrderItem struct {
 	ProductID   string
 	ProductName string
 	Quantity    int
-	UnitPrice   types.Money
+	UnitPrice   Money
 }
 
-func (i OrderItem) Subtotal() types.Money {
+func (i OrderItem) Subtotal() Money {
 	return i.UnitPrice.Multiply(int64(i.Quantity))
 }
 
 // NewOrder creates a new order for a user.
-func NewOrder(userID types.UserID) *Order {
+func NewOrder(userID userdomain.UserID) *Order {
 	return &Order{
-		id:        types.NewOrderID(),
+		id:        NewOrderID(),
 		userID:    userID,
 		items:     make([]OrderItem, 0),
 		status:    StatusDraft,
-		total:     types.MustNewMoney(0, "USD"),
+		total:     MustNewMoney(0, "USD"),
 		createdAt: time.Now().UTC(),
 		updatedAt: time.Now().UTC(),
 	}
@@ -45,11 +45,11 @@ func NewOrder(userID types.UserID) *Order {
 
 // Reconstitute rebuilds an order from persistence.
 func Reconstitute(
-	id types.OrderID,
-	userID types.UserID,
+	id OrderID,
+	userID userdomain.UserID,
 	items []OrderItem,
 	status Status,
-	total types.Money,
+	total Money,
 	createdAt, updatedAt time.Time,
 ) *Order {
 	return &Order{
@@ -65,18 +65,18 @@ func Reconstitute(
 
 // Getters
 
-func (o *Order) ID() types.OrderID        { return o.id }
-func (o *Order) UserID() types.UserID     { return o.userID }
+func (o *Order) ID() OrderID        { return o.id }
+func (o *Order) UserID() userdomain.UserID     { return o.userID }
 func (o *Order) Items() []OrderItem       { return o.items }
 func (o *Order) Status() Status           { return o.status }
-func (o *Order) Total() types.Money       { return o.total }
+func (o *Order) Total() Money       { return o.total }
 func (o *Order) CreatedAt() time.Time     { return o.createdAt }
 func (o *Order) UpdatedAt() time.Time     { return o.updatedAt }
 
 // Business methods
 
 // AddItem adds an item to the order.
-func (o *Order) AddItem(productID, productName string, quantity int, unitPrice types.Money) error {
+func (o *Order) AddItem(productID, productName string, quantity int, unitPrice Money) error {
 	if o.status != StatusDraft {
 		return ErrOrderNotDraft
 	}
@@ -181,5 +181,5 @@ func (o *Order) recalculateTotal() {
 		total += subtotal.Amount()
 		currency = subtotal.Currency()
 	}
-	o.total = types.MustNewMoney(total, currency)
+	o.total = MustNewMoney(total, currency)
 }

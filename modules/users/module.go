@@ -9,8 +9,8 @@ import (
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
 	"github.com/rai/clean-modularmonolith-go/modules/users/application/commands"
 	"github.com/rai/clean-modularmonolith-go/modules/users/application/queries"
+	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 	httphandler "github.com/rai/clean-modularmonolith-go/modules/users/infrastructure/http"
-	"github.com/rai/clean-modularmonolith-go/modules/users/infrastructure/persistence"
 )
 
 // Module is the public API for the users bounded context.
@@ -23,6 +23,7 @@ type Module interface {
 
 // Config holds the module configuration.
 type Config struct {
+	Repository     domain.UserRepository
 	EventPublisher events.Publisher
 }
 
@@ -37,16 +38,14 @@ type module struct {
 
 // New creates a new users module with all dependencies wired.
 func New(cfg Config) Module {
-	repository := persistence.NewInMemoryRepository()
-
 	// Wire up command handlers
-	createUserHandler := commands.NewCreateUserHandler(repository, cfg.EventPublisher)
-	updateUserHandler := commands.NewUpdateUserHandler(repository, cfg.EventPublisher)
-	deleteUserHandler := commands.NewDeleteUserHandler(repository, cfg.EventPublisher)
+	createUserHandler := commands.NewCreateUserHandler(cfg.Repository, cfg.EventPublisher)
+	updateUserHandler := commands.NewUpdateUserHandler(cfg.Repository, cfg.EventPublisher)
+	deleteUserHandler := commands.NewDeleteUserHandler(cfg.Repository, cfg.EventPublisher)
 
 	// Wire up query handlers
-	getUserHandler := queries.NewGetUserHandler(repository)
-	listUsersHandler := queries.NewListUsersHandler(repository)
+	getUserHandler := queries.NewGetUserHandler(cfg.Repository)
+	listUsersHandler := queries.NewListUsersHandler(cfg.Repository)
 
 	return &module{
 		createUserHandler: createUserHandler,

@@ -2,8 +2,6 @@ package domain
 
 import (
 	"context"
-
-	"github.com/rai/clean-modularmonolith-go/modules/shared/types"
 )
 
 // UserRepository defines the persistence interface for users.
@@ -15,14 +13,14 @@ type UserRepository interface {
 
 	// FindByID retrieves a user by ID.
 	// Returns ErrUserNotFound if user doesn't exist.
-	FindByID(ctx context.Context, id types.UserID) (*User, error)
+	FindByID(ctx context.Context, id UserID) (*User, error)
 
 	// FindByEmail retrieves a user by email.
 	// Returns ErrUserNotFound if user doesn't exist.
 	FindByEmail(ctx context.Context, email Email) (*User, error)
 
 	// Delete removes a user from persistence.
-	Delete(ctx context.Context, id types.UserID) error
+	Delete(ctx context.Context, id UserID) error
 
 	// Exists checks if a user with the given email exists.
 	Exists(ctx context.Context, email Email) (bool, error)

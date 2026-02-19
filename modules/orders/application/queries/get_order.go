@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
-	"github.com/rai/clean-modularmonolith-go/modules/shared/types"
 )
 
 // OrderDTO is a read model for order data.
@@ -48,7 +47,7 @@ func NewGetOrderHandler(repo domain.OrderRepository) *GetOrderHandler {
 }
 
 func (h *GetOrderHandler) Handle(ctx context.Context, query GetOrderQuery) (*OrderDTO, error) {
-	orderID, err := types.ParseOrderID(query.OrderID)
+	orderID, err := domain.ParseOrderID(query.OrderID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid order ID: %w", err)
 	}

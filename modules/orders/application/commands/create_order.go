@@ -7,7 +7,7 @@ import (
 
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
-	"github.com/rai/clean-modularmonolith-go/modules/shared/types"
+	userdomain "github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
 // CreateOrderCommand creates a new order for a user.
@@ -25,7 +25,7 @@ func NewCreateOrderHandler(repo domain.OrderRepository, publisher events.Publish
 }
 
 func (h *CreateOrderHandler) Handle(ctx context.Context, cmd CreateOrderCommand) (string, error) {
-	userID, err := types.ParseUserID(cmd.UserID)
+	userID, err := userdomain.ParseUserID(cmd.UserID)
 	if err != nil {
 		return "", fmt.Errorf("invalid user ID: %w", err)
 	}

@@ -26,7 +26,7 @@ Uses `go.work` to manage independent Go modules:
 - `modules/users` - User management bounded context
 - `modules/orders` - Order management bounded context
 - `modules/notifications` - Notification handling (event-driven)
-- `modules/shared` - Shared kernel (types, events)
+- `modules/shared` - Shared kernel (events only)
 - `internal/platform` - Infrastructure (HTTP server, event bus)
 - `cmd/server` - Application entry point
 
@@ -66,6 +66,6 @@ Events flow: `orders` subscribes to `UserDeleted` from `users`; `notifications` 
 
 ## Conventions
 
-- Typed IDs: Use `types.UserID`, `types.OrderID` instead of raw strings
+- Typed IDs: Use `domain.UserID`, `domain.OrderID` instead of raw strings (each module owns its ID type)
 - Value objects validate on construction (`NewEmail`, `NewName`)
 - Aggregate roots control their invariants through business methods

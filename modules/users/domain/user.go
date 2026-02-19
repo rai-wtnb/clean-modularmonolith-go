@@ -4,14 +4,12 @@ package domain
 
 import (
 	"time"
-
-	"github.com/rai/clean-modularmonolith-go/modules/shared/types"
 )
 
 // User is the aggregate root for the user bounded context.
 // It encapsulates all user-related business rules.
 type User struct {
-	id        types.UserID
+	id        UserID
 	email     Email
 	name      Name
 	status    Status
@@ -23,7 +21,7 @@ type User struct {
 // Factory function enforces all invariants at creation time.
 func NewUser(email Email, name Name) *User {
 	return &User{
-		id:        types.NewUserID(),
+		id:        NewUserID(),
 		email:     email,
 		name:      name,
 		status:    StatusActive,
@@ -35,7 +33,7 @@ func NewUser(email Email, name Name) *User {
 // Reconstitute recreates a User from persistence.
 // Used by repositories to rebuild aggregates from stored data.
 func Reconstitute(
-	id types.UserID,
+	id UserID,
 	email Email,
 	name Name,
 	status Status,
@@ -53,7 +51,7 @@ func Reconstitute(
 
 // Getters - expose state without allowing direct mutation
 
-func (u *User) ID() types.UserID     { return u.id }
+func (u *User) ID() UserID           { return u.id }
 func (u *User) Email() Email         { return u.email }
 func (u *User) Name() Name           { return u.name }
 func (u *User) Status() Status       { return u.status }

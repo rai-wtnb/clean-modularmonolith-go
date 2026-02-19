@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
-	"github.com/rai/clean-modularmonolith-go/modules/shared/types"
 )
 
 // AddItemCommand adds an item to an order.
@@ -27,7 +26,7 @@ func NewAddItemHandler(repo domain.OrderRepository) *AddItemHandler {
 }
 
 func (h *AddItemHandler) Handle(ctx context.Context, cmd AddItemCommand) error {
-	orderID, err := types.ParseOrderID(cmd.OrderID)
+	orderID, err := domain.ParseOrderID(cmd.OrderID)
 	if err != nil {
 		return fmt.Errorf("invalid order ID: %w", err)
 	}
@@ -37,7 +36,7 @@ func (h *AddItemHandler) Handle(ctx context.Context, cmd AddItemCommand) error {
 		return fmt.Errorf("finding order: %w", err)
 	}
 
-	unitPrice, err := types.NewMoney(cmd.UnitPrice, cmd.Currency)
+	unitPrice, err := domain.NewMoney(cmd.UnitPrice, cmd.Currency)
 	if err != nil {
 		return fmt.Errorf("invalid unit price: %w", err)
 	}

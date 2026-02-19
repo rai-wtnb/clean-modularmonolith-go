@@ -6,7 +6,6 @@ import (
 
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
-	"github.com/rai/clean-modularmonolith-go/modules/shared/types"
 )
 
 // CancelOrderCommand cancels an order.
@@ -24,7 +23,7 @@ func NewCancelOrderHandler(repo domain.OrderRepository, publisher events.Publish
 }
 
 func (h *CancelOrderHandler) Handle(ctx context.Context, cmd CancelOrderCommand) error {
-	orderID, err := types.ParseOrderID(cmd.OrderID)
+	orderID, err := domain.ParseOrderID(cmd.OrderID)
 	if err != nil {
 		return fmt.Errorf("invalid order ID: %w", err)
 	}

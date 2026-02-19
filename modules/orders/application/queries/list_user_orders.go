@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
-	"github.com/rai/clean-modularmonolith-go/modules/shared/types"
+	userdomain "github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
 // OrderListDTO contains a paginated list of orders.
@@ -32,7 +32,7 @@ func NewListUserOrdersHandler(repo domain.OrderRepository) *ListUserOrdersHandle
 }
 
 func (h *ListUserOrdersHandler) Handle(ctx context.Context, query ListUserOrdersQuery) (*OrderListDTO, error) {
-	userID, err := types.ParseUserID(query.UserID)
+	userID, err := userdomain.ParseUserID(query.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid user ID: %w", err)
 	}

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/rai/clean-modularmonolith-go/modules/shared/types"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
@@ -40,7 +39,7 @@ func NewGetUserHandler(repo domain.UserRepository) *GetUserHandler {
 
 // Handle executes the get user query.
 func (h *GetUserHandler) Handle(ctx context.Context, query GetUserQuery) (*UserDTO, error) {
-	userID, err := types.ParseUserID(query.UserID)
+	userID, err := domain.ParseUserID(query.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid user ID: %w", err)
 	}

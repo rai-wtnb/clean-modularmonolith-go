@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
-	"github.com/rai/clean-modularmonolith-go/modules/shared/types"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
@@ -32,7 +31,7 @@ func NewUpdateUserHandler(repo domain.UserRepository, publisher events.Publisher
 // Handle executes the update user use case.
 func (h *UpdateUserHandler) Handle(ctx context.Context, cmd UpdateUserCommand) error {
 	// Parse user ID
-	userID, err := types.ParseUserID(cmd.UserID)
+	userID, err := domain.ParseUserID(cmd.UserID)
 	if err != nil {
 		return fmt.Errorf("invalid user ID: %w", err)
 	}

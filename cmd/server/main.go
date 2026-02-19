@@ -13,9 +13,12 @@ import (
 
 	"github.com/rai/clean-modularmonolith-go/internal/platform/eventbus"
 	"github.com/rai/clean-modularmonolith-go/internal/platform/httpserver"
+	"github.com/rai/clean-modularmonolith-go/internal/platform/spanner"
 	"github.com/rai/clean-modularmonolith-go/modules/notifications"
 	"github.com/rai/clean-modularmonolith-go/modules/orders"
+	orderspersistence "github.com/rai/clean-modularmonolith-go/modules/orders/infrastructure/persistence"
 	"github.com/rai/clean-modularmonolith-go/modules/users"
+	userspersistence "github.com/rai/clean-modularmonolith-go/modules/users/infrastructure/persistence"
 )
 
 func main() {
@@ -29,17 +32,40 @@ func main() {
 
 	logger.Info("starting modular monolith application")
 
+	// Initialize Spanner client
+	ctx := context.Background()
+	spannerCfg := spanner.Config{
+		ProjectID:  getEnv("SPANNER_PROJECT_ID", "local-project"),
+		InstanceID: getEnv("SPANNER_INSTANCE_ID", "local-instance"),
+		DatabaseID: getEnv("SPANNER_DATABASE_ID", "app-db"),
+	}
+
+	spannerClient, err := spanner.NewClient(ctx, spannerCfg)
+	if err != nil {
+		logger.Error("failed to create spanner client", slog.Any("error", err))
+		os.Exit(1)
+	}
+	defer spannerClient.Close()
+
+	logger.Info("connected to spanner", slog.String("dsn", spannerCfg.DSN()))
+
 	// Initialize event bus (for inter-module communication)
 	eventBus := eventbus.New(logger)
+
+	// Initialize repositories
+	usersRepo := userspersistence.NewSpannerRepository(spannerClient)
+	ordersRepo := orderspersistence.NewSpannerRepository(spannerClient)
 
 	// Initialize modules
 	// Each module subscribes to events it cares about internally
 	usersCfg := users.Config{
+		Repository:     usersRepo,
 		EventPublisher: eventBus,
 	}
 	usersModule := users.New(usersCfg)
 
 	ordersCfg := orders.Config{
+		Repository:      ordersRepo,
 		EventPublisher:  eventBus,
 		EventSubscriber: eventBus,
 		Logger:          logger,
@@ -108,4 +134,12 @@ func buildRouter(usersModule users.Module, ordersModule orders.Module) http.Hand
 	ordersModule.RegisterRoutes(mux)
 
 	return mux
+}
+
+// getEnv returns the value of an environment variable or a default value.
+func getEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
 }

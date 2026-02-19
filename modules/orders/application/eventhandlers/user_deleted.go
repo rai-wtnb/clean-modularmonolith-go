@@ -6,7 +6,6 @@ import (
 
 	"github.com/rai/clean-modularmonolith-go/modules/orders/application/commands"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
-	"github.com/rai/clean-modularmonolith-go/modules/shared/types"
 	userdomain "github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
@@ -31,7 +30,7 @@ func (h *UserDeletedHandler) Handle(ctx context.Context, event events.Event) err
 	}
 
 	h.logger.Info("handling user deleted event, canceling user orders",
-		slog.String("user_id", userDeleted.UserID.String()),
+		slog.String("user_id", userDeleted.UserID),
 	)
 
 	// Cancel all pending orders for this user
@@ -39,7 +38,7 @@ func (h *UserDeletedHandler) Handle(ctx context.Context, event events.Event) err
 	// 1. Query all pending orders for the user
 	// 2. Cancel each order
 	// For now, we just log the intent
-	_ = types.UserID(userDeleted.UserID)
+	_ = userDeleted.UserID
 
 	return nil
 }

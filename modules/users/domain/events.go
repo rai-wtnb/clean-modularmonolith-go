@@ -2,7 +2,6 @@ package domain
 
 import (
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
-	"github.com/rai/clean-modularmonolith-go/modules/shared/types"
 )
 
 // Domain events for the users bounded context.
@@ -55,12 +54,12 @@ func NewUserUpdatedEvent(user *User) UserUpdatedEvent {
 // UserDeletedEvent is published when a user is deleted.
 type UserDeletedEvent struct {
 	events.BaseEvent
-	UserID types.UserID `json:"user_id"`
+	UserID string `json:"user_id"`
 }
 
-func NewUserDeletedEvent(userID types.UserID) UserDeletedEvent {
+func NewUserDeletedEvent(userID UserID) UserDeletedEvent {
 	return UserDeletedEvent{
 		BaseEvent: events.NewBaseEvent(UserDeletedEventType, userID.String()),
-		UserID:    userID,
+		UserID:    userID.String(),
 	}
 }
