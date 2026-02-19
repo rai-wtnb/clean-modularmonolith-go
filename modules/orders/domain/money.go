@@ -54,7 +54,3 @@ func (m Money) Multiply(factor int64) Money {
 func (m Money) Equals(other Money) bool {
 	return m.amount == other.amount && m.currency == other.currency
 }
-
-func (m Money) String() string {
-	return fmt.Sprintf("%d %s", m.amount, m.currency)
-}

@@ -24,9 +24,6 @@ func NewSpannerRepository(client *spanner.Client) *SpannerRepository {
 	return &SpannerRepository{client: client}
 }
 
-// Compile-time interface check.
-var _ domain.OrderRepository = (*SpannerRepository)(nil)
-
 func (r *SpannerRepository) Save(ctx context.Context, order *domain.Order) error {
 	_, err := r.client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
 		orderID := order.ID().String()
