@@ -176,6 +176,100 @@ func (u *spannerUoW) Users() domain.UserRepository {
 
 After the transaction completes (commit or rollback), `spannerUoW` and `txnUserRepository` are discarded (eligible for GC). These are lightweight structs, so the per-transaction allocation overhead is negligible.
 
+## Testing
+
+Unit of Work adds some test setup overhead but enables verification of cross-repository coordination.
+
+### Test Helper
+
+Create a test-specific UoW that executes without actual transactions:
+
+```go
+type testUnitOfWork struct {
+    users  domain.UserRepository
+    orders domain.OrderRepository
+}
+
+func NewTestUoW(users domain.UserRepository, orders domain.OrderRepository) UnitOfWork {
+    return &testUnitOfWork{users: users, orders: orders}
+}
+
+func (u *testUnitOfWork) Execute(ctx context.Context, fn func(UoW) error) error {
+    return fn(u)  // Execute directly without transaction wrapper
+}
+
+func (u *testUnitOfWork) Users() domain.UserRepository  { return u.users }
+func (u *testUnitOfWork) Orders() domain.OrderRepository { return u.orders }
+```
+
+### Verifying Operation Sequence
+
+Track repository calls to verify operations happen in correct order:
+
+```go
+func TestTransferOrder_OperationSequence(t *testing.T) {
+    var calls []string
+
+    mockUsers := &MockUserRepository{
+        FindByIDFn: func(ctx context.Context, id UserID) (*User, error) {
+            calls = append(calls, "users.FindByID:"+id.String())
+            return &User{}, nil
+        },
+        SaveFn: func(ctx context.Context, u *User) error {
+            calls = append(calls, "users.Save:"+u.ID().String())
+            return nil
+        },
+    }
+
+    mockOrders := &MockOrderRepository{
+        FindByIDFn: func(ctx context.Context, id OrderID) (*Order, error) {
+            calls = append(calls, "orders.FindByID")
+            return &Order{}, nil
+        },
+        SaveFn: func(ctx context.Context, o *Order) error {
+            calls = append(calls, "orders.Save")
+            return nil
+        },
+    }
+
+    uow := NewTestUoW(mockUsers, mockOrders)
+    handler := NewTransferOrderHandler(uow)
+
+    err := handler.Handle(ctx, TransferOrderCommand{OrderID: "order-1", NewUserID: "new-user"})
+
+    require.NoError(t, err)
+    assert.Equal(t, []string{
+        "orders.FindByID",
+        "users.FindByID:old-user",
+        "users.FindByID:new-user",
+        "users.Save:old-user",
+        "users.Save:new-user",
+        "orders.Save",
+    }, calls)
+}
+```
+
+### What Can Be Verified
+
+| Verification Target | How to Test |
+| ------------------- | ----------- |
+| Call sequence | Record calls in a slice, assert order |
+| All repos in same UoW | Assert `Execute` is called exactly once |
+| Rollback on error | Return error from mock, verify subsequent Saves are not called |
+| Correct arguments | Capture arguments in mock, assert values |
+| Atomicity guarantee | Structurally guaranteed - all operations inside `Execute` callback |
+
+### Comparison: Testing Without UoW
+
+Without UoW, each repository is injected separately:
+
+```go
+// Simple but cannot verify cross-repository atomicity
+handler := NewHandler(mockUserRepo, mockOrderRepo)
+```
+
+With UoW, the `Execute` scope structurally guarantees all operations occur within the same transaction boundary - this is verifiable by checking that `Execute` is called once and all repository operations happen inside its callback.
+
 ## Comparison
 
 | Aspect           | Repository-scoped TX (Current) | Unit of Work                     |

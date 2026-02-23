@@ -54,10 +54,3 @@ func (b *InMemoryEventBus) Subscribe(eventType string, handler events.Handler) e
 
 	return nil
 }
-
-// HandlerFunc is an adapter to use ordinary functions as event handlers.
-type HandlerFunc func(ctx context.Context, event events.Event) error
-
-func (f HandlerFunc) Handle(ctx context.Context, event events.Event) error {
-	return f(ctx, event)
-}
