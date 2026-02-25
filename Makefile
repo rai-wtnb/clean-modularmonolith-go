@@ -1,4 +1,4 @@
-.PHONY: workspace build run test test-coverage lint clean tidy help
+.PHONY: workspace build run test test-coverage lint clean tidy deps-check deps-update sync vulncheck help
 
 # Module paths
 MODULES := cmd/server modules/shared modules/users modules/orders modules/notifications internal/platform
@@ -49,6 +49,30 @@ tidy:
 		echo "Tidying $$mod..."; \
 		(cd $$mod && go mod tidy); \
 	done
+
+## deps-check: Check for available dependency updates
+deps-check:
+	@for mod in $(MODULES); do \
+		echo "=== $$mod ==="; \
+		(cd $$mod && go list -m -u all 2>/dev/null | grep '\[' || echo "No updates available"); \
+	done
+
+## deps-update: Update all dependencies across all modules
+deps-update:
+	@for mod in $(MODULES); do \
+		echo "Updating $$mod..."; \
+		(cd $$mod && go get -u ./... && go mod tidy); \
+	done
+	@$(MAKE) sync
+
+## sync: Synchronize go.work with all modules
+sync:
+	go work sync
+
+## vulncheck: Check for security vulnerabilities
+vulncheck:
+	@command -v govulncheck >/dev/null 2>&1 || { echo "Installing govulncheck..."; go install golang.org/x/vuln/cmd/govulncheck@latest; }
+	govulncheck ./...
 
 ## clean: Remove build artifacts
 clean:
