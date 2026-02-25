@@ -6,7 +6,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
+	"github.com/rai/clean-modularmonolith-go/internal/platform/eventbus"
+	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
@@ -17,22 +18,35 @@ type CreateUserCommand struct {
 	LastName  string
 }
 
-// CreateUserHandler handles the CreateUserCommand.
-type CreateUserHandler struct {
-	repo      domain.UserRepository
-	publisher events.Publisher
+// CreateUserResult holds the result of creating a user.
+type CreateUserResult struct {
+	UserID string
 }
 
-func NewCreateUserHandler(repo domain.UserRepository, publisher events.Publisher) *CreateUserHandler {
+// CreateUserHandler handles the CreateUserCommand.
+type CreateUserHandler struct {
+	repo            domain.UserRepository
+	txScope         transaction.TransactionScope
+	handlerRegistry eventbus.HandlerRegistry
+}
+
+func NewCreateUserHandler(
+	repo domain.UserRepository,
+	txScope transaction.TransactionScope,
+	handlerRegistry eventbus.HandlerRegistry,
+) *CreateUserHandler {
 	return &CreateUserHandler{
-		repo:      repo,
-		publisher: publisher,
+		repo:            repo,
+		txScope:         txScope,
+		handlerRegistry: handlerRegistry,
 	}
 }
 
 // Handle executes the create user use case.
+// The operation runs within a transaction, and domain events are dispatched
+// before commit, allowing event handlers to participate in the same transaction.
 func (h *CreateUserHandler) Handle(ctx context.Context, cmd CreateUserCommand) (string, error) {
-	// Validate and create value objects
+	// Validate and create value objects (before transaction)
 	email, err := domain.NewEmail(cmd.Email)
 	if err != nil {
 		return "", fmt.Errorf("invalid email: %w", err)
@@ -43,32 +57,49 @@ func (h *CreateUserHandler) Handle(ctx context.Context, cmd CreateUserCommand) (
 		return "", fmt.Errorf("invalid name: %w", err)
 	}
 
-	// Check for existing email
-	exists, err := h.repo.Exists(ctx, email)
-	if err != nil {
-		return "", fmt.Errorf("checking email existence: %w", err)
-	}
-	if exists {
-		return "", domain.ErrEmailExists
-	}
+	var userID string
 
-	// Create the user aggregate
-	user := domain.NewUser(email, name)
+	err = h.txScope.Execute(ctx, func(ctx context.Context) error {
+		// Create event bus inside closure for Spanner retry safety
+		eventBus := eventbus.NewTransactional(h.handlerRegistry, 10)
 
-	// Persist the user
-	if err := h.repo.Save(ctx, user); err != nil {
-		return "", fmt.Errorf("saving user: %w", err)
-	}
-
-	// Publish domain event
-	if h.publisher != nil {
-		event := domain.NewUserCreatedEvent(user)
-		if err := h.publisher.Publish(ctx, event); err != nil {
-			// Log but don't fail - event publishing is eventually consistent
-			// In production, use outbox pattern for reliability
-			_ = err
+		// Check for existing email
+		exists, err := h.repo.Exists(ctx, email)
+		if err != nil {
+			return fmt.Errorf("checking email existence: %w", err)
 		}
+		if exists {
+			return domain.ErrEmailExists
+		}
+
+		// Create the user aggregate (adds UserCreatedEvent internally)
+		user := domain.NewUser(email, name)
+		userID = user.ID().String()
+
+		// Persist the user
+		if err := h.repo.Save(ctx, user); err != nil {
+			return fmt.Errorf("saving user: %w", err)
+		}
+
+		// Collect events from aggregate and publish to bus
+		for _, event := range user.DomainEvents() {
+			if err := eventBus.Publish(ctx, event); err != nil {
+				return fmt.Errorf("publishing event: %w", err)
+			}
+		}
+		user.ClearDomainEvents()
+
+		// Flush events (handlers run within same transaction)
+		if err := eventBus.Flush(ctx); err != nil {
+			return fmt.Errorf("flushing events: %w", err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return "", err
 	}
 
-	return user.ID().String(), nil
+	return userID, nil
 }

@@ -10,8 +10,8 @@ import (
 	"google.golang.org/api/iterator"
 	"google.golang.org/grpc/codes"
 
+	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
-	userdomain "github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
 // SpannerRepository implements OrderRepository using Cloud Spanner.
@@ -25,58 +25,67 @@ func NewSpannerRepository(client *spanner.Client) *SpannerRepository {
 }
 
 func (r *SpannerRepository) Save(ctx context.Context, order *domain.Order) error {
+	// Use existing transaction if available
+	if txn, ok := transaction.TxFromContext(ctx); ok {
+		return r.saveWithTx(txn, order)
+	}
+
+	// Fallback: create own transaction (backward compatible)
 	_, err := r.client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
-		orderID := order.ID().String()
-
-		// Delete existing items first (handles item removal on update)
-		if err := txn.BufferWrite([]*spanner.Mutation{
-			spanner.Delete("OrderItems", spanner.KeyRange{
-				Start: spanner.Key{orderID},
-				End:   spanner.Key{orderID},
-				Kind:  spanner.ClosedClosed,
-			}),
-		}); err != nil {
-			return fmt.Errorf("failed to delete existing items: %w", err)
-		}
-
-		// Build mutations for order and items
-		mutations := []*spanner.Mutation{
-			spanner.InsertOrUpdate("Orders",
-				[]string{"OrderID", "UserID", "Status", "TotalAmount", "TotalCurrency", "CreatedAt", "UpdatedAt"},
-				[]interface{}{
-					orderID,
-					order.UserID().String(),
-					order.Status().String(),
-					order.Total().Amount(),
-					order.Total().Currency(),
-					order.CreatedAt(),
-					order.UpdatedAt(),
-				},
-			),
-		}
-
-		for i, item := range order.Items() {
-			mutations = append(mutations, spanner.InsertOrUpdate("OrderItems",
-				[]string{"OrderID", "ItemIndex", "ProductID", "ProductName", "Quantity", "UnitAmount", "Currency"},
-				[]interface{}{
-					orderID,
-					int64(i),
-					item.ProductID,
-					item.ProductName,
-					int64(item.Quantity),
-					item.UnitPrice.Amount(),
-					item.UnitPrice.Currency(),
-				},
-			))
-		}
-
-		return txn.BufferWrite(mutations)
+		return r.saveWithTx(txn, order)
 	})
-
 	if err != nil {
 		return fmt.Errorf("failed to save order: %w", err)
 	}
 	return nil
+}
+
+func (r *SpannerRepository) saveWithTx(txn *spanner.ReadWriteTransaction, order *domain.Order) error {
+	orderID := order.ID().String()
+
+	// Delete existing items first (handles item removal on update)
+	if err := txn.BufferWrite([]*spanner.Mutation{
+		spanner.Delete("OrderItems", spanner.KeyRange{
+			Start: spanner.Key{orderID},
+			End:   spanner.Key{orderID},
+			Kind:  spanner.ClosedClosed,
+		}),
+	}); err != nil {
+		return fmt.Errorf("failed to delete existing items: %w", err)
+	}
+
+	// Build mutations for order and items
+	mutations := []*spanner.Mutation{
+		spanner.InsertOrUpdate("Orders",
+			[]string{"OrderID", "UserID", "Status", "TotalAmount", "TotalCurrency", "CreatedAt", "UpdatedAt"},
+			[]interface{}{
+				orderID,
+				order.UserRef().String(),
+				order.Status().String(),
+				order.Total().Amount(),
+				order.Total().Currency(),
+				order.CreatedAt(),
+				order.UpdatedAt(),
+			},
+		),
+	}
+
+	for i, item := range order.Items() {
+		mutations = append(mutations, spanner.InsertOrUpdate("OrderItems",
+			[]string{"OrderID", "ItemIndex", "ProductID", "ProductName", "Quantity", "UnitAmount", "Currency"},
+			[]interface{}{
+				orderID,
+				int64(i),
+				item.ProductID,
+				item.ProductName,
+				int64(item.Quantity),
+				item.UnitPrice.Amount(),
+				item.UnitPrice.Currency(),
+			},
+		))
+	}
+
+	return txn.BufferWrite(mutations)
 }
 
 func (r *SpannerRepository) FindByID(ctx context.Context, id domain.OrderID) (*domain.Order, error) {
@@ -111,16 +120,13 @@ func (r *SpannerRepository) FindByID(ctx context.Context, id domain.OrderID) (*d
 		return nil, fmt.Errorf("failed to parse order id: %w", err)
 	}
 
-	parsedUserID, err := userdomain.ParseUserID(userID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse user id: %w", err)
-	}
+	userRef := domain.MustNewUserRef(userID)
 
 	total := domain.MustNewMoney(totalAmount, totalCurrency)
 
 	return domain.Reconstitute(
 		parsedOrderID,
-		parsedUserID,
+		userRef,
 		items,
 		domain.Status(status),
 		total,
@@ -129,13 +135,13 @@ func (r *SpannerRepository) FindByID(ctx context.Context, id domain.OrderID) (*d
 	), nil
 }
 
-func (r *SpannerRepository) FindByUserID(ctx context.Context, userID userdomain.UserID, offset, limit int) ([]*domain.Order, int, error) {
+func (r *SpannerRepository) FindByUserRef(ctx context.Context, userRef domain.UserRef, offset, limit int) ([]*domain.Order, int, error) {
 	txn := r.client.Single()
 
 	// Get total count
 	countStmt := spanner.Statement{
 		SQL:    `SELECT COUNT(*) FROM Orders WHERE UserID = @userID`,
-		Params: map[string]interface{}{"userID": userID.String()},
+		Params: map[string]interface{}{"userID": userRef.String()},
 	}
 
 	countIter := txn.Query(ctx, countStmt)
@@ -160,7 +166,7 @@ func (r *SpannerRepository) FindByUserID(ctx context.Context, userID userdomain.
 		      ORDER BY CreatedAt DESC
 		      LIMIT @limit OFFSET @offset`,
 		Params: map[string]interface{}{
-			"userID": userID.String(),
+			"userID": userRef.String(),
 			"limit":  int64(limit),
 			"offset": int64(offset),
 		},
@@ -193,12 +199,12 @@ func (r *SpannerRepository) FindByUserID(ctx context.Context, userID userdomain.
 		}
 
 		parsedOrderID, _ := domain.ParseOrderID(orderID)
-		parsedUserID, _ := userdomain.ParseUserID(userIDStr)
+		userRefFromDB := domain.MustNewUserRef(userIDStr)
 		orderTotal := domain.MustNewMoney(totalAmount, totalCurrency)
 
 		orders = append(orders, domain.Reconstitute(
 			parsedOrderID,
-			parsedUserID,
+			userRefFromDB,
 			items,
 			domain.Status(status),
 			orderTotal,
@@ -211,10 +217,18 @@ func (r *SpannerRepository) FindByUserID(ctx context.Context, userID userdomain.
 }
 
 func (r *SpannerRepository) Delete(ctx context.Context, id domain.OrderID) error {
-	// ON DELETE CASCADE handles OrderItems automatically
-	_, err := r.client.Apply(ctx, []*spanner.Mutation{
+	mutations := []*spanner.Mutation{
+		// ON DELETE CASCADE handles OrderItems automatically
 		spanner.Delete("Orders", spanner.Key{id.String()}),
-	})
+	}
+
+	// Use existing transaction if available
+	if txn, ok := transaction.TxFromContext(ctx); ok {
+		return txn.BufferWrite(mutations)
+	}
+
+	// Fallback: standalone mutation (backward compatible)
+	_, err := r.client.Apply(ctx, mutations)
 	if err != nil {
 		return fmt.Errorf("failed to delete order: %w", err)
 	}

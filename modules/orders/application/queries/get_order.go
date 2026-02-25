@@ -81,7 +81,7 @@ func toOrderDTO(order *domain.Order) *OrderDTO {
 
 	return &OrderDTO{
 		ID:     order.ID().String(),
-		UserID: order.UserID().String(),
+		UserID: order.UserRef().String(),
 		Items:  items,
 		Status: order.Status().String(),
 		Total: MoneyDTO{

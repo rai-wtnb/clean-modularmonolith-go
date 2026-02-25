@@ -14,6 +14,7 @@ import (
 	"github.com/rai/clean-modularmonolith-go/internal/platform/eventbus"
 	"github.com/rai/clean-modularmonolith-go/internal/platform/httpserver"
 	"github.com/rai/clean-modularmonolith-go/internal/platform/spanner"
+	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/notifications"
 	"github.com/rai/clean-modularmonolith-go/modules/orders"
 	orderspersistence "github.com/rai/clean-modularmonolith-go/modules/orders/infrastructure/persistence"
@@ -49,7 +50,11 @@ func main() {
 
 	logger.Info("connected to spanner", slog.String("dsn", spannerCfg.DSN()))
 
+	// Initialize transaction scope for transactional operations
+	txScope := transaction.NewSpannerTransactionScope(spannerClient)
+
 	// Initialize event bus (for inter-module communication)
+	// The event bus also serves as HandlerRegistry for TransactionalEventBus
 	eventBus := eventbus.New(logger)
 
 	// Initialize repositories
@@ -59,19 +64,23 @@ func main() {
 	// Initialize modules
 	// Each module subscribes to events it cares about internally
 	usersCfg := users.Config{
-		Repository:     usersRepo,
-		EventPublisher: eventBus,
+		Repository:       usersRepo,
+		TransactionScope: txScope,
+		HandlerRegistry:  eventBus,
 	}
 	usersModule := users.New(usersCfg)
 
 	ordersCfg := orders.Config{
-		Repository:      ordersRepo,
-		EventPublisher:  eventBus,
-		EventSubscriber: eventBus,
-		Logger:          logger,
+		Repository:       ordersRepo,
+		TransactionScope: txScope,
+		HandlerRegistry:  eventBus,
+		EventSubscriber:  eventBus,
+		Logger:           logger,
 	}
 	ordersModule := orders.New(ordersCfg)
 
+	// Notifications module subscribes to events but runs outside transactions
+	// (external side effects like email should not be in DB transactions)
 	notificationCfg := notifications.Config{
 		EventSubscriber: eventBus,
 		Logger:          logger,

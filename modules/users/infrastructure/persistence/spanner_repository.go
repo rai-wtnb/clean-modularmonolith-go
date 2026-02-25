@@ -10,6 +10,7 @@ import (
 	"google.golang.org/api/iterator"
 	"google.golang.org/grpc/codes"
 
+	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
@@ -27,7 +28,7 @@ func NewSpannerRepository(client *spanner.Client) *SpannerRepository {
 var _ domain.UserRepository = (*SpannerRepository)(nil)
 
 func (r *SpannerRepository) Save(ctx context.Context, user *domain.User) error {
-	_, err := r.client.Apply(ctx, []*spanner.Mutation{
+	mutations := []*spanner.Mutation{
 		spanner.InsertOrUpdate("Users",
 			[]string{"UserID", "Email", "FirstName", "LastName", "Status", "CreatedAt", "UpdatedAt"},
 			[]interface{}{
@@ -40,7 +41,15 @@ func (r *SpannerRepository) Save(ctx context.Context, user *domain.User) error {
 				user.UpdatedAt(),
 			},
 		),
-	})
+	}
+
+	// Use existing transaction if available
+	if txn, ok := transaction.TxFromContext(ctx); ok {
+		return txn.BufferWrite(mutations)
+	}
+
+	// Fallback: standalone mutation (backward compatible)
+	_, err := r.client.Apply(ctx, mutations)
 	if err != nil {
 		return fmt.Errorf("failed to save user: %w", err)
 	}
@@ -86,9 +95,17 @@ func (r *SpannerRepository) FindByEmail(ctx context.Context, email domain.Email)
 }
 
 func (r *SpannerRepository) Delete(ctx context.Context, id domain.UserID) error {
-	_, err := r.client.Apply(ctx, []*spanner.Mutation{
+	mutations := []*spanner.Mutation{
 		spanner.Delete("Users", spanner.Key{id.String()}),
-	})
+	}
+
+	// Use existing transaction if available
+	if txn, ok := transaction.TxFromContext(ctx); ok {
+		return txn.BufferWrite(mutations)
+	}
+
+	// Fallback: standalone mutation (backward compatible)
+	_, err := r.client.Apply(ctx, mutations)
 	if err != nil {
 		return fmt.Errorf("failed to delete user: %w", err)
 	}

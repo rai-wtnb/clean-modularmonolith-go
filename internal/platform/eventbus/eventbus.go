@@ -14,13 +14,13 @@ import (
 // Events are delivered synchronously in the same goroutine.
 type InMemoryEventBus struct {
 	mu       sync.RWMutex
-	handlers map[string][]events.Handler
+	handlers map[events.EventType][]events.Handler
 	logger   *slog.Logger
 }
 
 func New(logger *slog.Logger) *InMemoryEventBus {
 	return &InMemoryEventBus{
-		handlers: make(map[string][]events.Handler),
+		handlers: make(map[events.EventType][]events.Handler),
 		logger:   logger,
 	}
 }
@@ -31,12 +31,12 @@ func (b *InMemoryEventBus) Publish(ctx context.Context, event events.Event) erro
 	handlers := b.handlers[event.EventType()]
 	b.mu.RUnlock()
 
-	b.logger.Debug("publishing event", slog.String("event_type", event.EventType()), slog.String("event_id", event.EventID()), slog.Int("handler_count", len(handlers)))
+	b.logger.Debug("publishing event", slog.String("event_type", event.EventType().String()), slog.String("event_id", event.EventID()), slog.Int("handler_count", len(handlers)))
 
 	// FIXME: They should be processed concurrently.
 	for _, handler := range handlers {
 		if err := handler.Handle(ctx, event); err != nil {
-			b.logger.Error("event handler failed", slog.String("event_type", event.EventType()), slog.String("event_id", event.EventID()), slog.Any("error", err))
+			b.logger.Error("event handler failed", slog.String("event_type", event.EventType().String()), slog.String("event_id", event.EventID()), slog.Any("error", err))
 			// Continue processing other handlers even if one fails
 		}
 	}
@@ -45,12 +45,27 @@ func (b *InMemoryEventBus) Publish(ctx context.Context, event events.Event) erro
 }
 
 // Subscribe implements events.Subscriber.
-func (b *InMemoryEventBus) Subscribe(eventType string, handler events.Handler) error {
+func (b *InMemoryEventBus) Subscribe(eventType events.EventType, handler events.Handler) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
 	b.handlers[eventType] = append(b.handlers[eventType], handler)
-	b.logger.Debug("subscribed to event", slog.String("event_type", eventType))
+	b.logger.Debug("subscribed to event", slog.String("event_type", eventType.String()))
 
 	return nil
 }
+
+// HandlersFor implements HandlerRegistry.
+// Returns a copy of the handlers slice to avoid race conditions.
+func (b *InMemoryEventBus) HandlersFor(eventType events.EventType) []events.Handler {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	handlers := b.handlers[eventType]
+	result := make([]events.Handler, len(handlers))
+	copy(result, handlers)
+	return result
+}
+
+// Compile-time interface check.
+var _ HandlerRegistry = (*InMemoryEventBus)(nil)

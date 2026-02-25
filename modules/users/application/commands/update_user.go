@@ -4,7 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
+	"github.com/rai/clean-modularmonolith-go/internal/platform/eventbus"
+	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
@@ -17,54 +18,70 @@ type UpdateUserCommand struct {
 
 // UpdateUserHandler handles the UpdateUserCommand.
 type UpdateUserHandler struct {
-	repo      domain.UserRepository
-	publisher events.Publisher
+	repo            domain.UserRepository
+	txScope         transaction.TransactionScope
+	handlerRegistry eventbus.HandlerRegistry
 }
 
-func NewUpdateUserHandler(repo domain.UserRepository, publisher events.Publisher) *UpdateUserHandler {
+func NewUpdateUserHandler(
+	repo domain.UserRepository,
+	txScope transaction.TransactionScope,
+	handlerRegistry eventbus.HandlerRegistry,
+) *UpdateUserHandler {
 	return &UpdateUserHandler{
-		repo:      repo,
-		publisher: publisher,
+		repo:            repo,
+		txScope:         txScope,
+		handlerRegistry: handlerRegistry,
 	}
 }
 
 // Handle executes the update user use case.
+// The operation runs within a transaction, and domain events are dispatched
+// before commit, allowing event handlers to participate in the same transaction.
 func (h *UpdateUserHandler) Handle(ctx context.Context, cmd UpdateUserCommand) error {
-	// Parse user ID
 	userID, err := domain.ParseUserID(cmd.UserID)
 	if err != nil {
 		return fmt.Errorf("invalid user ID: %w", err)
 	}
 
-	// Retrieve the user
-	user, err := h.repo.FindByID(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("finding user: %w", err)
-	}
-
-	// Create new name value object
 	name, err := domain.NewName(cmd.FirstName, cmd.LastName)
 	if err != nil {
 		return fmt.Errorf("invalid name: %w", err)
 	}
 
-	// Update the user (domain method enforces business rules)
-	if err := user.UpdateProfile(name); err != nil {
-		return fmt.Errorf("updating profile: %w", err)
-	}
+	return h.txScope.Execute(ctx, func(ctx context.Context) error {
+		// Create event bus inside closure for Spanner retry safety
+		eventBus := eventbus.NewTransactional(h.handlerRegistry, 10)
 
-	// Persist changes
-	if err := h.repo.Save(ctx, user); err != nil {
-		return fmt.Errorf("saving user: %w", err)
-	}
-
-	// Publish domain event
-	if h.publisher != nil {
-		event := domain.NewUserUpdatedEvent(user)
-		if err := h.publisher.Publish(ctx, event); err != nil {
-			_ = err
+		// Load aggregate
+		user, err := h.repo.FindByID(ctx, userID)
+		if err != nil {
+			return fmt.Errorf("finding user: %w", err)
 		}
-	}
 
-	return nil
+		// Execute business logic (adds UserUpdatedEvent internally)
+		if err := user.UpdateProfile(name); err != nil {
+			return fmt.Errorf("updating profile: %w", err)
+		}
+
+		// Persist changes
+		if err := h.repo.Save(ctx, user); err != nil {
+			return fmt.Errorf("saving user: %w", err)
+		}
+
+		// Collect events from aggregate and publish to bus
+		for _, event := range user.DomainEvents() {
+			if err := eventBus.Publish(ctx, event); err != nil {
+				return fmt.Errorf("publishing event: %w", err)
+			}
+		}
+		user.ClearDomainEvents()
+
+		// Flush events (handlers run within same transaction)
+		if err := eventBus.Flush(ctx); err != nil {
+			return fmt.Errorf("flushing events: %w", err)
+		}
+
+		return nil
+	})
 }

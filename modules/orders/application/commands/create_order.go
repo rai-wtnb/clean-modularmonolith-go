@@ -5,9 +5,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/rai/clean-modularmonolith-go/internal/platform/eventbus"
+	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
-	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
-	userdomain "github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
 // CreateOrderCommand creates a new order for a user.
@@ -16,30 +16,66 @@ type CreateOrderCommand struct {
 }
 
 type CreateOrderHandler struct {
-	repo      domain.OrderRepository
-	publisher events.Publisher
+	repo            domain.OrderRepository
+	txScope         transaction.TransactionScope
+	handlerRegistry eventbus.HandlerRegistry
 }
 
-func NewCreateOrderHandler(repo domain.OrderRepository, publisher events.Publisher) *CreateOrderHandler {
-	return &CreateOrderHandler{repo: repo, publisher: publisher}
+func NewCreateOrderHandler(
+	repo domain.OrderRepository,
+	txScope transaction.TransactionScope,
+	handlerRegistry eventbus.HandlerRegistry,
+) *CreateOrderHandler {
+	return &CreateOrderHandler{
+		repo:            repo,
+		txScope:         txScope,
+		handlerRegistry: handlerRegistry,
+	}
 }
 
+// Handle executes the create order use case.
+// The operation runs within a transaction, and domain events are dispatched
+// before commit, allowing event handlers to participate in the same transaction.
 func (h *CreateOrderHandler) Handle(ctx context.Context, cmd CreateOrderCommand) (string, error) {
-	userID, err := userdomain.ParseUserID(cmd.UserID)
+	userRef, err := domain.NewUserRef(cmd.UserID)
 	if err != nil {
 		return "", fmt.Errorf("invalid user ID: %w", err)
 	}
 
-	order := domain.NewOrder(userID)
+	var orderID string
 
-	if err := h.repo.Save(ctx, order); err != nil {
-		return "", fmt.Errorf("saving order: %w", err)
+	err = h.txScope.Execute(ctx, func(ctx context.Context) error {
+		// Create event bus inside closure for Spanner retry safety
+		eventBus := eventbus.NewTransactional(h.handlerRegistry, 10)
+
+		// Create the order aggregate (adds OrderCreatedEvent internally)
+		order := domain.NewOrder(userRef)
+		orderID = order.ID().String()
+
+		// Persist the order
+		if err := h.repo.Save(ctx, order); err != nil {
+			return fmt.Errorf("saving order: %w", err)
+		}
+
+		// Collect events from aggregate and publish to bus
+		for _, event := range order.DomainEvents() {
+			if err := eventBus.Publish(ctx, event); err != nil {
+				return fmt.Errorf("publishing event: %w", err)
+			}
+		}
+		order.ClearDomainEvents()
+
+		// Flush events (handlers run within same transaction)
+		if err := eventBus.Flush(ctx); err != nil {
+			return fmt.Errorf("flushing events: %w", err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return "", err
 	}
 
-	if h.publisher != nil {
-		event := domain.NewOrderCreatedEvent(order)
-		_ = h.publisher.Publish(ctx, event)
-	}
-
-	return order.ID().String(), nil
+	return orderID, nil
 }

@@ -1,0 +1,76 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - depguard
+    - govet
+    - errcheck
+    - staticcheck
+    - unused
+    - gosimple
+    - ineffassign
+
+linters-settings:
+  depguard:
+    rules:
+      # Prevent orders module from importing users domain
+      orders-no-users-domain:
+        files:
+          - "**/modules/orders/**/*.go"
+        deny:
+          - pkg: "github.com/rai/clean-modularmonolith-go/modules/users/domain"
+            desc: "Cross-module domain import forbidden. Use shared/events/contracts for cross-module types."
+          - pkg: "github.com/rai/clean-modularmonolith-go/modules/users/application"
+            desc: "Cross-module application import forbidden."
+          - pkg: "github.com/rai/clean-modularmonolith-go/modules/users/infrastructure"
+            desc: "Cross-module infrastructure import forbidden."
+
+      # Prevent users module from importing orders domain
+      users-no-orders-domain:
+        files:
+          - "**/modules/users/**/*.go"
+        deny:
+          - pkg: "github.com/rai/clean-modularmonolith-go/modules/orders/domain"
+            desc: "Cross-module domain import forbidden. Use shared/events/contracts for cross-module types."
+          - pkg: "github.com/rai/clean-modularmonolith-go/modules/orders/application"
+            desc: "Cross-module application import forbidden."
+          - pkg: "github.com/rai/clean-modularmonolith-go/modules/orders/infrastructure"
+            desc: "Cross-module infrastructure import forbidden."
+
+      # Prevent notifications module from importing other modules' internals
+      notifications-isolation:
+        files:
+          - "**/modules/notifications/**/*.go"
+        deny:
+          - pkg: "github.com/rai/clean-modularmonolith-go/modules/users/domain"
+            desc: "Cross-module domain import forbidden. Use shared/events/contracts for cross-module types."
+          - pkg: "github.com/rai/clean-modularmonolith-go/modules/users/application"
+            desc: "Cross-module application import forbidden."
+          - pkg: "github.com/rai/clean-modularmonolith-go/modules/users/infrastructure"
+            desc: "Cross-module infrastructure import forbidden."
+          - pkg: "github.com/rai/clean-modularmonolith-go/modules/orders/domain"
+            desc: "Cross-module domain import forbidden. Use shared/events/contracts for cross-module types."
+          - pkg: "github.com/rai/clean-modularmonolith-go/modules/orders/application"
+            desc: "Cross-module application import forbidden."
+          - pkg: "github.com/rai/clean-modularmonolith-go/modules/orders/infrastructure"
+            desc: "Cross-module infrastructure import forbidden."
+
+      # Domain layer should not import application or infrastructure
+      domain-purity:
+        files:
+          - "**/domain/**/*.go"
+        deny:
+          - pkg: "github.com/rai/clean-modularmonolith-go/modules/*/application"
+            desc: "Domain layer cannot import application layer (dependency rule violation)."
+          - pkg: "github.com/rai/clean-modularmonolith-go/modules/*/infrastructure"
+            desc: "Domain layer cannot import infrastructure layer (dependency rule violation)."
+          - pkg: "github.com/rai/clean-modularmonolith-go/internal/platform"
+            desc: "Domain layer cannot import platform/infrastructure code."
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0

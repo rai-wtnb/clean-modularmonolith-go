@@ -4,11 +4,15 @@ package domain
 
 import (
 	"time"
+
+	shareddomain "github.com/rai/clean-modularmonolith-go/modules/shared/domain"
 )
 
 // User is the aggregate root for the user bounded context.
 // It encapsulates all user-related business rules.
 type User struct {
+	shareddomain.AggregateRoot
+
 	id        UserID
 	email     Email
 	name      Name
@@ -19,8 +23,9 @@ type User struct {
 
 // NewUser creates a new User with validated inputs.
 // Factory function enforces all invariants at creation time.
+// Adds UserCreatedEvent to be dispatched after persistence.
 func NewUser(email Email, name Name) *User {
-	return &User{
+	u := &User{
 		id:        NewUserID(),
 		email:     email,
 		name:      name,
@@ -28,6 +33,8 @@ func NewUser(email Email, name Name) *User {
 		createdAt: time.Now().UTC(),
 		updatedAt: time.Now().UTC(),
 	}
+	u.AddDomainEvent(NewUserCreatedEvent(u))
+	return u
 }
 
 // Reconstitute recreates a User from persistence.
@@ -61,22 +68,26 @@ func (u *User) UpdatedAt() time.Time { return u.updatedAt }
 // Business methods - encapsulate business rules
 
 // UpdateProfile updates the user's profile information.
+// Adds UserUpdatedEvent to be dispatched after persistence.
 func (u *User) UpdateProfile(name Name) error {
 	if u.status == StatusDeleted {
 		return ErrUserDeleted
 	}
 	u.name = name
 	u.updatedAt = time.Now().UTC()
+	u.AddDomainEvent(NewUserUpdatedEvent(u))
 	return nil
 }
 
 // ChangeEmail changes the user's email address.
+// Adds UserUpdatedEvent to be dispatched after persistence.
 func (u *User) ChangeEmail(email Email) error {
 	if u.status == StatusDeleted {
 		return ErrUserDeleted
 	}
 	u.email = email
 	u.updatedAt = time.Now().UTC()
+	u.AddDomainEvent(NewUserUpdatedEvent(u))
 	return nil
 }
 
@@ -101,9 +112,11 @@ func (u *User) Activate() error {
 }
 
 // Delete marks the user as deleted (soft delete).
+// Adds UserDeletedEvent to be dispatched after persistence.
 func (u *User) Delete() error {
 	u.status = StatusDeleted
 	u.updatedAt = time.Now().UTC()
+	u.AddDomainEvent(NewUserDeletedEvent(u.id))
 	return nil
 }
 

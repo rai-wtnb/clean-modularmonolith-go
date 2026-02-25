@@ -55,6 +55,21 @@ The goal is to manage **complexity** (Ousterhout's central insight) by decomposi
 
 Modules communicate exclusively through **domain events** — no direct imports of another module's internals. This creates an **Anti-Corruption Layer** by design.
 
+### Module Dependency Graph
+
+The following graph visualizes the internal package dependencies. Note how modules only depend on `shared` (the Shared Kernel) and never import each other's internals directly.
+
+![Module Dependencies](docs/deps.svg)
+
+**Key observations:**
+
+- `cmd/server` is the composition root that wires all modules together
+- Each module (`users`, `orders`, `notifications`) depends only on `shared/events` for cross-module communication
+- `internal/platform` provides infrastructure without leaking into domain code
+- No circular dependencies exist between modules
+
+To regenerate: `make deps-svg`
+
 ## Design Principles
 
 ### Deep Modules (A Philosophy of Software Design)
@@ -275,10 +290,12 @@ make run
 ### Commands
 
 ```bash
-make build    # Build binary
-make test     # Run all tests
-make lint     # Static analysis
-make tidy     # go mod tidy all modules
+make build      # Build binary
+make test       # Run all tests
+make lint       # Static analysis
+make tidy       # go mod tidy all modules
+make deps-graph # Check cross-module dependencies (text)
+make deps-svg   # Generate dependency graph (docs/deps.svg)
 ```
 
 ## Production Considerations

@@ -5,10 +5,31 @@ package events
 
 import (
 	"context"
+	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// EventType represents a domain event type with format "module.AggregateVerb".
+// Examples: "users.UserCreated", "orders.OrderSubmitted"
+type EventType string
+
+// eventTypePattern validates the format: lowercase_module.PascalCaseEvent
+var eventTypePattern = regexp.MustCompile(`^[a-z]+\.[A-Z][a-zA-Z]+$`)
+
+// Validate checks if the event type follows the required format.
+func (t EventType) Validate() error {
+	if !eventTypePattern.MatchString(string(t)) {
+		return fmt.Errorf("invalid event type format %q: must match 'module.AggregateVerb' (e.g., 'orders.OrderCreated')", t)
+	}
+	return nil
+}
+
+func (t EventType) String() string {
+	return string(t)
+}
 
 // Event represents a domain event that occurred in the system.
 // Events are immutable facts about something that happened.
@@ -16,7 +37,7 @@ type Event interface {
 	// EventID returns the unique identifier for this event instance.
 	EventID() string
 	// EventType returns the type name of the event (e.g., "UserCreated").
-	EventType() string
+	EventType() EventType
 	// OccurredAt returns when the event occurred.
 	OccurredAt() time.Time
 	// AggregateID returns the ID of the aggregate that produced this event.
@@ -26,12 +47,16 @@ type Event interface {
 // BaseEvent provides common event fields. Embed this in concrete event types.
 type BaseEvent struct {
 	ID          string    `json:"id"`
-	Type        string    `json:"type"`
+	Type        EventType `json:"type"`
 	Timestamp   time.Time `json:"timestamp"`
 	AggregateId string    `json:"aggregate_id"`
 }
 
-func NewBaseEvent(eventType, aggregateID string) BaseEvent {
+// NewBaseEvent creates a new BaseEvent. Panics if eventType format is invalid.
+func NewBaseEvent(eventType EventType, aggregateID string) BaseEvent {
+	if err := eventType.Validate(); err != nil {
+		panic(err)
+	}
 	return BaseEvent{
 		ID:          uuid.New().String(),
 		Type:        eventType,
@@ -41,7 +66,7 @@ func NewBaseEvent(eventType, aggregateID string) BaseEvent {
 }
 
 func (e BaseEvent) EventID() string       { return e.ID }
-func (e BaseEvent) EventType() string     { return e.Type }
+func (e BaseEvent) EventType() EventType  { return e.Type }
 func (e BaseEvent) OccurredAt() time.Time { return e.Timestamp }
 func (e BaseEvent) AggregateID() string   { return e.AggregateId }
 
@@ -57,5 +82,5 @@ type Handler interface {
 
 // Subscriber subscribes to domain events.
 type Subscriber interface {
-	Subscribe(eventType string, handler Handler) error
+	Subscribe(eventType EventType, handler Handler) error
 }

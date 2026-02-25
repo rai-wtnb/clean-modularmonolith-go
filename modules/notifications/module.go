@@ -4,8 +4,8 @@ import (
 	"log/slog"
 
 	"github.com/rai/clean-modularmonolith-go/modules/notifications/application/eventhandlers"
-	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/events/contracts"
 )
 
 // Module represents the notification module entry point.
@@ -24,7 +24,7 @@ func New(cfg Config) *Module {
 	orderSubmittedHandler := eventhandlers.NewOrderSubmittedHandler(logger)
 
 	// Subscribe to events
-	if err := cfg.EventSubscriber.Subscribe(domain.OrderSubmittedEventType, orderSubmittedHandler); err != nil {
+	if err := cfg.EventSubscriber.Subscribe(contracts.OrderSubmittedEventType, orderSubmittedHandler); err != nil {
 		logger.Error("failed to subscribe to order submitted event", slog.Any("error", err))
 		// specific error handling strategy (panic vs log) depends on requirements
 	}

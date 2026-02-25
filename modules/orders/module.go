@@ -6,13 +6,15 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/rai/clean-modularmonolith-go/internal/platform/eventbus"
+	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/orders/application/commands"
 	"github.com/rai/clean-modularmonolith-go/modules/orders/application/eventhandlers"
 	"github.com/rai/clean-modularmonolith-go/modules/orders/application/queries"
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
 	httphandler "github.com/rai/clean-modularmonolith-go/modules/orders/infrastructure/http"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
-	userdomain "github.com/rai/clean-modularmonolith-go/modules/users/domain" // FIXME: this shouldn't be imported
+	"github.com/rai/clean-modularmonolith-go/modules/shared/events/contracts"
 )
 
 // Module is the public API for the orders bounded context.
@@ -25,10 +27,11 @@ type Module interface {
 
 // Config holds the module configuration.
 type Config struct {
-	Repository      domain.OrderRepository
-	EventPublisher  events.Publisher
-	EventSubscriber events.Subscriber
-	Logger          *slog.Logger
+	Repository       domain.OrderRepository
+	TransactionScope transaction.TransactionScope
+	HandlerRegistry  eventbus.HandlerRegistry
+	EventSubscriber  events.Subscriber
+	Logger           *slog.Logger
 }
 
 type module struct {
@@ -49,19 +52,20 @@ func New(cfg Config) Module {
 	}
 	logger = logger.With("module", "orders")
 
-	createOrderHandler := commands.NewCreateOrderHandler(cfg.Repository, cfg.EventPublisher)
+	createOrderHandler := commands.NewCreateOrderHandler(cfg.Repository, cfg.TransactionScope, cfg.HandlerRegistry)
 	addItemHandler := commands.NewAddItemHandler(cfg.Repository)
 	removeItemHandler := commands.NewRemoveItemHandler(cfg.Repository)
-	submitOrderHandler := commands.NewSubmitOrderHandler(cfg.Repository, cfg.EventPublisher)
-	cancelOrderHandler := commands.NewCancelOrderHandler(cfg.Repository, cfg.EventPublisher)
+	submitOrderHandler := commands.NewSubmitOrderHandler(cfg.Repository, cfg.TransactionScope, cfg.HandlerRegistry)
+	cancelOrderHandler := commands.NewCancelOrderHandler(cfg.Repository, cfg.TransactionScope, cfg.HandlerRegistry)
 
 	getOrderHandler := queries.NewGetOrderHandler(cfg.Repository)
 	listUserOrdersHandler := queries.NewListUserOrdersHandler(cfg.Repository)
 
 	// Subscribe to cross-module events
+	// UserDeletedHandler runs within the same transaction as user deletion
 	if cfg.EventSubscriber != nil {
-		userDeletedHandler := eventhandlers.NewUserDeletedHandler(cancelOrderHandler, logger)
-		if err := cfg.EventSubscriber.Subscribe(userdomain.UserDeletedEventType, userDeletedHandler); err != nil {
+		userDeletedHandler := eventhandlers.NewUserDeletedHandler(cfg.Repository, logger)
+		if err := cfg.EventSubscriber.Subscribe(contracts.UserDeletedEventType, userDeletedHandler); err != nil {
 			logger.Error("failed to subscribe to user deleted event", slog.Any("error", err))
 		}
 	}

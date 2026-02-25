@@ -1,4 +1,4 @@
-.PHONY: workspace build run test test-coverage lint clean tidy deps-check deps-update sync vulncheck help
+.PHONY: workspace build run test test-coverage lint clean tidy deps-check deps-update sync vulncheck deps-graph deps-svg help
 
 # Module paths
 MODULES := cmd/server modules/shared modules/users modules/orders modules/notifications internal/platform
@@ -73,6 +73,38 @@ sync:
 vulncheck:
 	@command -v govulncheck >/dev/null 2>&1 || { echo "Installing govulncheck..."; go install golang.org/x/vuln/cmd/govulncheck@latest; }
 	govulncheck ./...
+
+## deps-graph: Show cross-module dependency graph
+deps-graph:
+	@echo "=== Module Dependencies ==="
+	@echo ""
+	@echo "Legend: ✅ clean | ❌ forbidden import | ✓ allowed (shared)"
+	@echo ""
+	@for module in orders users notifications; do \
+		echo "📦 modules/$$module:"; \
+		forbidden=$$(go list -f '{{range .Imports}}{{.}}{{"\n"}}{{end}}' ./modules/$$module/... 2>/dev/null \
+			| grep "github.com/rai/clean-modularmonolith-go/modules" \
+			| grep -v "modules/$$module" \
+			| grep -v "modules/shared" \
+			| sort -u); \
+		if [ -z "$$forbidden" ]; then \
+			echo "   ✅ No cross-module imports"; \
+		else \
+			echo "$$forbidden" | sed 's/^/   ❌ /'; \
+		fi; \
+		go list -f '{{range .Imports}}{{.}}{{"\n"}}{{end}}' ./modules/$$module/... 2>/dev/null \
+			| grep "modules/shared" \
+			| sort -u \
+			| sed 's/^/   ✓ /'; \
+		echo ""; \
+	done
+
+## deps-svg: Generate dependency graph SVG in docs/
+deps-svg:
+	@command -v goda >/dev/null 2>&1 || { echo "Installing goda..."; go install github.com/loov/goda@latest; }
+	@command -v dot >/dev/null 2>&1 || { echo "Error: graphviz not installed. Run: brew install graphviz"; exit 1; }
+	goda graph "github.com/rai/clean-modularmonolith-go/..." | dot -Tsvg -o docs/deps.svg
+	@echo "Generated docs/deps.svg"
 
 ## clean: Remove build artifacts
 clean:

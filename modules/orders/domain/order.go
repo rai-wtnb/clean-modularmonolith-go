@@ -4,13 +4,15 @@ package domain
 import (
 	"time"
 
-	userdomain "github.com/rai/clean-modularmonolith-go/modules/users/domain"
+	shareddomain "github.com/rai/clean-modularmonolith-go/modules/shared/domain"
 )
 
 // Order is the aggregate root for the order bounded context.
 type Order struct {
+	shareddomain.AggregateRoot
+
 	id        OrderID
-	userID    userdomain.UserID
+	userRef   UserRef
 	items     []OrderItem
 	status    Status
 	total     Money
@@ -31,22 +33,25 @@ func (i OrderItem) Subtotal() Money {
 }
 
 // NewOrder creates a new order for a user.
-func NewOrder(userID userdomain.UserID) *Order {
-	return &Order{
+// Adds OrderCreatedEvent to be dispatched after persistence.
+func NewOrder(userRef UserRef) *Order {
+	o := &Order{
 		id:        NewOrderID(),
-		userID:    userID,
+		userRef:   userRef,
 		items:     make([]OrderItem, 0),
 		status:    StatusDraft,
 		total:     MustNewMoney(0, "USD"),
 		createdAt: time.Now().UTC(),
 		updatedAt: time.Now().UTC(),
 	}
+	o.AddDomainEvent(NewOrderCreatedEvent(o))
+	return o
 }
 
 // Reconstitute rebuilds an order from persistence.
 func Reconstitute(
 	id OrderID,
-	userID userdomain.UserID,
+	userRef UserRef,
 	items []OrderItem,
 	status Status,
 	total Money,
@@ -54,7 +59,7 @@ func Reconstitute(
 ) *Order {
 	return &Order{
 		id:        id,
-		userID:    userID,
+		userRef:   userRef,
 		items:     items,
 		status:    status,
 		total:     total,
@@ -65,8 +70,8 @@ func Reconstitute(
 
 // Getters
 
-func (o *Order) ID() OrderID        { return o.id }
-func (o *Order) UserID() userdomain.UserID     { return o.userID }
+func (o *Order) ID() OrderID      { return o.id }
+func (o *Order) UserRef() UserRef { return o.userRef }
 func (o *Order) Items() []OrderItem       { return o.items }
 func (o *Order) Status() Status           { return o.status }
 func (o *Order) Total() Money       { return o.total }
@@ -124,6 +129,7 @@ func (o *Order) RemoveItem(productID string) error {
 }
 
 // Submit submits the order for processing.
+// Adds OrderSubmittedEvent to be dispatched after persistence.
 func (o *Order) Submit() error {
 	if o.status != StatusDraft {
 		return ErrOrderNotDraft
@@ -134,6 +140,7 @@ func (o *Order) Submit() error {
 
 	o.status = StatusPending
 	o.updatedAt = time.Now().UTC()
+	o.AddDomainEvent(NewOrderSubmittedEvent(o))
 	return nil
 }
 
@@ -149,6 +156,7 @@ func (o *Order) Confirm() error {
 }
 
 // Cancel cancels the order.
+// Adds OrderCancelledEvent to be dispatched after persistence.
 func (o *Order) Cancel() error {
 	if o.status == StatusCancelled {
 		return ErrOrderAlreadyCancelled
@@ -159,6 +167,7 @@ func (o *Order) Cancel() error {
 
 	o.status = StatusCancelled
 	o.updatedAt = time.Now().UTC()
+	o.AddDomainEvent(NewOrderCancelledEvent(o))
 	return nil
 }
 

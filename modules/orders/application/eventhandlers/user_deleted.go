@@ -2,28 +2,31 @@ package eventhandlers
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
-	"github.com/rai/clean-modularmonolith-go/modules/orders/application/commands"
+	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
-	userdomain "github.com/rai/clean-modularmonolith-go/modules/users/domain"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/events/contracts"
 )
 
 // UserDeletedHandler handles UserDeleted events by canceling pending orders.
+// This handler runs within the same transaction as the user deletion,
+// ensuring atomic consistency between user deletion and order cancellation.
 type UserDeletedHandler struct {
-	cancelOrderHandler *commands.CancelOrderHandler
-	logger             *slog.Logger
+	orderRepo domain.OrderRepository
+	logger    *slog.Logger
 }
 
-func NewUserDeletedHandler(cancelOrderHandler *commands.CancelOrderHandler, logger *slog.Logger) *UserDeletedHandler {
+func NewUserDeletedHandler(orderRepo domain.OrderRepository, logger *slog.Logger) *UserDeletedHandler {
 	return &UserDeletedHandler{
-		cancelOrderHandler: cancelOrderHandler,
-		logger:             logger,
+		orderRepo: orderRepo,
+		logger:    logger,
 	}
 }
 
 func (h *UserDeletedHandler) Handle(ctx context.Context, event events.Event) error {
-	userDeleted, ok := event.(userdomain.UserDeletedEvent)
+	userDeleted, ok := event.(contracts.UserDeletedEvent)
 	if !ok {
 		h.logger.Warn("unexpected event type", slog.String("expected", "UserDeletedEvent"))
 		return nil
@@ -33,12 +36,41 @@ func (h *UserDeletedHandler) Handle(ctx context.Context, event events.Event) err
 		slog.String("user_id", userDeleted.UserID),
 	)
 
-	// Cancel all pending orders for this user
-	// In a real application, we would:
-	// 1. Query all pending orders for the user
-	// 2. Cancel each order
-	// For now, we just log the intent
-	_ = userDeleted.UserID
+	// Parse user reference
+	userRef, err := domain.NewUserRef(userDeleted.UserID)
+	if err != nil {
+		return fmt.Errorf("parsing user ID: %w", err)
+	}
+
+	// The context contains the transaction from the originating command
+	// Repository operations here participate in the same transaction
+	orders, _, err := h.orderRepo.FindByUserRef(ctx, userRef, 0, 1000)
+	if err != nil {
+		return fmt.Errorf("finding user orders: %w", err)
+	}
+
+	// Cancel all cancellable orders
+	for _, order := range orders {
+		// Only cancel orders that are in draft or pending status
+		if order.Status() == domain.StatusDraft || order.Status() == domain.StatusPending {
+			if err := order.Cancel(); err != nil {
+				h.logger.Warn("failed to cancel order",
+					slog.String("order_id", order.ID().String()),
+					slog.Any("error", err),
+				)
+				continue
+			}
+
+			if err := h.orderRepo.Save(ctx, order); err != nil {
+				return fmt.Errorf("saving canceled order %s: %w", order.ID().String(), err)
+			}
+
+			h.logger.Info("canceled order for deleted user",
+				slog.String("order_id", order.ID().String()),
+				slog.String("user_id", userDeleted.UserID),
+			)
+		}
+	}
 
 	return nil
 }

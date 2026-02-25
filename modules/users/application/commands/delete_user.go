@@ -4,7 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
+	"github.com/rai/clean-modularmonolith-go/internal/platform/eventbus"
+	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
@@ -15,48 +16,65 @@ type DeleteUserCommand struct {
 
 // DeleteUserHandler handles the DeleteUserCommand.
 type DeleteUserHandler struct {
-	repo      domain.UserRepository
-	publisher events.Publisher
+	repo            domain.UserRepository
+	txScope         transaction.TransactionScope
+	handlerRegistry eventbus.HandlerRegistry
 }
 
-func NewDeleteUserHandler(repo domain.UserRepository, publisher events.Publisher) *DeleteUserHandler {
+func NewDeleteUserHandler(
+	repo domain.UserRepository,
+	txScope transaction.TransactionScope,
+	handlerRegistry eventbus.HandlerRegistry,
+) *DeleteUserHandler {
 	return &DeleteUserHandler{
-		repo:      repo,
-		publisher: publisher,
+		repo:            repo,
+		txScope:         txScope,
+		handlerRegistry: handlerRegistry,
 	}
 }
 
 // Handle executes the delete user use case.
+// The operation runs within a transaction, and domain events are dispatched
+// before commit, allowing event handlers to participate in the same transaction.
 func (h *DeleteUserHandler) Handle(ctx context.Context, cmd DeleteUserCommand) error {
-	// Parse user ID
 	userID, err := domain.ParseUserID(cmd.UserID)
 	if err != nil {
 		return fmt.Errorf("invalid user ID: %w", err)
 	}
 
-	// Verify user exists
-	user, err := h.repo.FindByID(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("finding user: %w", err)
-	}
+	return h.txScope.Execute(ctx, func(ctx context.Context) error {
+		// Create event bus inside closure for Spanner retry safety
+		eventBus := eventbus.NewTransactional(h.handlerRegistry, 10)
 
-	// Mark as deleted (soft delete via domain method)
-	if err := user.Delete(); err != nil {
-		return fmt.Errorf("deleting user: %w", err)
-	}
-
-	// Persist the deletion
-	if err := h.repo.Save(ctx, user); err != nil {
-		return fmt.Errorf("saving user: %w", err)
-	}
-
-	// Publish domain event
-	if h.publisher != nil {
-		event := domain.NewUserDeletedEvent(userID)
-		if err := h.publisher.Publish(ctx, event); err != nil {
-			_ = err
+		// 1. Load aggregate
+		user, err := h.repo.FindByID(ctx, userID)
+		if err != nil {
+			return fmt.Errorf("finding user: %w", err)
 		}
-	}
 
-	return nil
+		// 2. Execute business logic (adds event internally)
+		if err := user.Delete(); err != nil {
+			return fmt.Errorf("deleting user: %w", err)
+		}
+
+		// 3. Persist aggregate
+		if err := h.repo.Save(ctx, user); err != nil {
+			return fmt.Errorf("saving user: %w", err)
+		}
+
+		// 4. Collect events from aggregate and publish to bus
+		for _, event := range user.DomainEvents() {
+			if err := eventBus.Publish(ctx, event); err != nil {
+				return fmt.Errorf("publishing event: %w", err)
+			}
+		}
+		user.ClearDomainEvents()
+
+		// 5. Flush events (handlers run within same transaction)
+		if err := eventBus.Flush(ctx); err != nil {
+			return fmt.Errorf("flushing events: %w", err)
+		}
+
+		return nil
+	})
 }
