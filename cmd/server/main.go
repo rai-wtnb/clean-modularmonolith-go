@@ -14,7 +14,6 @@ import (
 	"github.com/rai/clean-modularmonolith-go/internal/platform/eventbus"
 	"github.com/rai/clean-modularmonolith-go/internal/platform/httpserver"
 	"github.com/rai/clean-modularmonolith-go/internal/platform/spanner"
-	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/notifications"
 	"github.com/rai/clean-modularmonolith-go/modules/orders"
 	orderspersistence "github.com/rai/clean-modularmonolith-go/modules/orders/infrastructure/persistence"
@@ -23,6 +22,8 @@ import (
 )
 
 func main() {
+	ctx := context.Background()
+
 	// Initialize logger
 	slogOptions := &slog.HandlerOptions{
 		Level: slog.LevelDebug,
@@ -34,13 +35,11 @@ func main() {
 	logger.Info("starting modular monolith application")
 
 	// Initialize Spanner client
-	ctx := context.Background()
 	spannerCfg := spanner.Config{
 		ProjectID:  getEnv("SPANNER_PROJECT_ID", "local-project"),
 		InstanceID: getEnv("SPANNER_INSTANCE_ID", "local-instance"),
 		DatabaseID: getEnv("SPANNER_DATABASE_ID", "app-db"),
 	}
-
 	spannerClient, err := spanner.NewClient(ctx, spannerCfg)
 	if err != nil {
 		logger.Error("failed to create spanner client", slog.Any("error", err))
@@ -51,11 +50,11 @@ func main() {
 	logger.Info("connected to spanner", slog.String("dsn", spannerCfg.DSN()))
 
 	// Initialize transaction scope for transactional operations
-	txScope := transaction.NewSpannerTransactionScope(spannerClient)
+	txScope := spanner.NewTransactionScope(spannerClient)
 
-	// Initialize event bus (for inter-module communication)
-	// The event bus also serves as HandlerRegistry for TransactionalEventBus
-	eventBus := eventbus.New(logger)
+	// Initialize event handler registry (for inter-module communication)
+	// Manages handler subscriptions and serves as HandlerRegistry for TransactionalEventBus
+	handlerRegistry := eventbus.NewEventHandlerRegistry(logger)
 
 	// Initialize repositories
 	usersRepo := userspersistence.NewSpannerRepository(spannerClient)
@@ -66,15 +65,15 @@ func main() {
 	usersCfg := users.Config{
 		Repository:       usersRepo,
 		TransactionScope: txScope,
-		HandlerRegistry:  eventBus,
+		HandlerRegistry:  handlerRegistry,
 	}
 	usersModule := users.New(usersCfg)
 
 	ordersCfg := orders.Config{
 		Repository:       ordersRepo,
 		TransactionScope: txScope,
-		HandlerRegistry:  eventBus,
-		EventSubscriber:  eventBus,
+		HandlerRegistry:  handlerRegistry,
+		EventSubscriber:  handlerRegistry,
 		Logger:           logger,
 	}
 	ordersModule := orders.New(ordersCfg)
@@ -82,7 +81,7 @@ func main() {
 	// Notifications module subscribes to events but runs outside transactions
 	// (external side effects like email should not be in DB transactions)
 	notificationCfg := notifications.Config{
-		EventSubscriber: eventBus,
+		EventSubscriber: handlerRegistry,
 		Logger:          logger,
 	}
 	_ = notifications.New(notificationCfg)

@@ -10,7 +10,7 @@ import (
 	"google.golang.org/api/iterator"
 	"google.golang.org/grpc/codes"
 
-	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
+	platformspanner "github.com/rai/clean-modularmonolith-go/internal/platform/spanner"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
@@ -44,7 +44,7 @@ func (r *SpannerRepository) Save(ctx context.Context, user *domain.User) error {
 	}
 
 	// Use existing transaction if available
-	if txn, ok := transaction.TxFromContext(ctx); ok {
+	if txn, ok := platformspanner.TxFromContext(ctx); ok {
 		return txn.BufferWrite(mutations)
 	}
 
@@ -100,7 +100,7 @@ func (r *SpannerRepository) Delete(ctx context.Context, id domain.UserID) error 
 	}
 
 	// Use existing transaction if available
-	if txn, ok := transaction.TxFromContext(ctx); ok {
+	if txn, ok := platformspanner.TxFromContext(ctx); ok {
 		return txn.BufferWrite(mutations)
 	}
 

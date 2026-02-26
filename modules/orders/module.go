@@ -61,8 +61,6 @@ func New(cfg Config) Module {
 	getOrderHandler := queries.NewGetOrderHandler(cfg.Repository)
 	listUserOrdersHandler := queries.NewListUserOrdersHandler(cfg.Repository)
 
-	// Subscribe to cross-module events
-	// UserDeletedHandler runs within the same transaction as user deletion
 	if cfg.EventSubscriber != nil {
 		userDeletedHandler := eventhandlers.NewUserDeletedHandler(cfg.Repository, logger)
 		if err := cfg.EventSubscriber.Subscribe(contracts.UserDeletedEventType, userDeletedHandler); err != nil {

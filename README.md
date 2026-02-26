@@ -64,16 +64,16 @@ Events and database changes must be atomic. If the transaction fails, no events 
 
 ```go
 err = txScope.Execute(ctx, func(ctx context.Context) error {
-    eventBus := eventbus.NewTransactional(registry, 10)
+    publisher := eventbus.NewTransactionalPublisher(registry, 10)
 
     user := domain.NewUser(email, name)  // Collects UserCreatedEvent
     repo.Save(ctx, user)
 
     for _, event := range user.DomainEvents() {
-        eventBus.Publish(ctx, event)     // Buffer, don't dispatch yet
+        publisher.Publish(ctx, event)    // Buffer, don't dispatch yet
     }
 
-    return eventBus.Flush(ctx)           // Handlers run within transaction
+    return publisher.Flush(ctx)          // Handlers run within transaction
 })
 // Transaction commits only if everything succeeds
 ```

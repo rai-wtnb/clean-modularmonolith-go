@@ -59,11 +59,10 @@ func (h *CreateUserHandler) Handle(ctx context.Context, cmd CreateUserCommand) (
 
 	var userID string
 
-	err = h.txScope.Execute(ctx, func(ctx context.Context) error {
-		// Create event bus inside closure for Spanner retry safety
-		eventBus := eventbus.NewTransactional(h.handlerRegistry, 10)
+	fn := func(ctx context.Context) error {
+		// Create publisher inside closure for Spanner retry safety
+		publisher := eventbus.NewTransactionalPublisher(h.handlerRegistry, 10)
 
-		// Check for existing email
 		exists, err := h.repo.Exists(ctx, email)
 		if err != nil {
 			return fmt.Errorf("checking email existence: %w", err)
@@ -81,21 +80,22 @@ func (h *CreateUserHandler) Handle(ctx context.Context, cmd CreateUserCommand) (
 			return fmt.Errorf("saving user: %w", err)
 		}
 
-		// Collect events from aggregate and publish to bus
+		// Collect events from aggregate and publish
 		for _, event := range user.DomainEvents() {
-			if err := eventBus.Publish(ctx, event); err != nil {
+			if err := publisher.Publish(ctx, event); err != nil {
 				return fmt.Errorf("publishing event: %w", err)
 			}
 		}
 		user.ClearDomainEvents()
 
 		// Flush events (handlers run within same transaction)
-		if err := eventBus.Flush(ctx); err != nil {
+		if err := publisher.Flush(ctx); err != nil {
 			return fmt.Errorf("flushing events: %w", err)
 		}
 
 		return nil
-	})
+	}
+	err = h.txScope.Execute(ctx, fn)
 
 	if err != nil {
 		return "", err

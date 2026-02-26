@@ -83,26 +83,26 @@ func (r *SpannerRepository) Save(ctx context.Context, order *Order) error {
 
 ### 3. Prevent Duplicate Event Firing on Retry
 
-When using `TransactionalEventBus`, events are buffered and processed before commit. On retry, events must not accumulate.
+When using `TransactionalPublisher`, events are buffered and processed before commit. On retry, events must not accumulate.
 
-**Solution:** Create `TransactionalEventBus` inside the transaction closure, ensuring a fresh instance on each retry.
+**Solution:** Create `TransactionalPublisher` inside the transaction closure, ensuring a fresh instance on each retry.
 
 ```go
-// GOOD: Fresh event bus per retry attempt
+// GOOD: Fresh publisher per retry attempt
 txScope.Execute(ctx, func(ctx context.Context) error {
-    eventBus := eventbus.NewTransactional(registry, 10) // Fresh instance
+    publisher := eventbus.NewTransactionalPublisher(registry, 10) // Fresh instance
 
     // ... business logic ...
 
-    eventBus.Publish(ctx, event)
-    return eventBus.Flush(ctx) // Events processed here
+    publisher.Publish(ctx, event)
+    return publisher.Flush(ctx) // Events processed here
 })
 
-// BAD: Reusing event bus across retries
-eventBus := eventbus.NewTransactional(registry, 10) // Created outside
+// BAD: Reusing publisher across retries
+publisher := eventbus.NewTransactionalPublisher(registry, 10) // Created outside
 txScope.Execute(ctx, func(ctx context.Context) error {
-    eventBus.Publish(ctx, event) // Accumulates on each retry!
-    return eventBus.Flush(ctx)
+    publisher.Publish(ctx, event) // Accumulates on each retry!
+    return publisher.Flush(ctx)
 })
 ```
 

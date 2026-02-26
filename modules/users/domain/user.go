@@ -39,12 +39,7 @@ func NewUser(email Email, name Name) *User {
 
 // Reconstitute recreates a User from persistence.
 // Used by repositories to rebuild aggregates from stored data.
-func Reconstitute(
-	id UserID,
-	email Email,
-	name Name,
-	status Status,
-	createdAt, updatedAt time.Time,
+func Reconstitute(id UserID, email Email, name Name, status Status, createdAt, updatedAt time.Time,
 ) *User {
 	return &User{
 		id:        id,

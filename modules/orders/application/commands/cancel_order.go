@@ -20,11 +20,7 @@ type CancelOrderHandler struct {
 	handlerRegistry eventbus.HandlerRegistry
 }
 
-func NewCancelOrderHandler(
-	repo domain.OrderRepository,
-	txScope transaction.TransactionScope,
-	handlerRegistry eventbus.HandlerRegistry,
-) *CancelOrderHandler {
+func NewCancelOrderHandler(repo domain.OrderRepository, txScope transaction.TransactionScope, handlerRegistry eventbus.HandlerRegistry) *CancelOrderHandler {
 	return &CancelOrderHandler{
 		repo:            repo,
 		txScope:         txScope,
@@ -42,8 +38,8 @@ func (h *CancelOrderHandler) Handle(ctx context.Context, cmd CancelOrderCommand)
 	}
 
 	return h.txScope.Execute(ctx, func(ctx context.Context) error {
-		// Create event bus inside closure for Spanner retry safety
-		eventBus := eventbus.NewTransactional(h.handlerRegistry, 10)
+		// Create publisher inside closure for Spanner retry safety
+		publisher := eventbus.NewTransactionalPublisher(h.handlerRegistry, 10)
 
 		// Load aggregate
 		order, err := h.repo.FindByID(ctx, orderID)
@@ -61,16 +57,16 @@ func (h *CancelOrderHandler) Handle(ctx context.Context, cmd CancelOrderCommand)
 			return fmt.Errorf("saving order: %w", err)
 		}
 
-		// Collect events from aggregate and publish to bus
+		// Collect events from aggregate and publish
 		for _, event := range order.DomainEvents() {
-			if err := eventBus.Publish(ctx, event); err != nil {
+			if err := publisher.Publish(ctx, event); err != nil {
 				return fmt.Errorf("publishing event: %w", err)
 			}
 		}
 		order.ClearDomainEvents()
 
 		// Flush events (handlers run within same transaction)
-		if err := eventBus.Flush(ctx); err != nil {
+		if err := publisher.Flush(ctx); err != nil {
 			return fmt.Errorf("flushing events: %w", err)
 		}
 

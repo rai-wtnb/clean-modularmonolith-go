@@ -39,7 +39,7 @@ The implementation combines three patterns:
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                           TransactionScope                               │
 │  ┌─────────────────┐                    ┌───────────────────────────┐   │
-│  │   Aggregate     │  DomainEvents()    │  TransactionalEventBus    │   │
+│  │   Aggregate     │  DomainEvents()    │  TransactionalPublisher   │   │
 │  │  ┌───────────┐  │ ─────────────────► │  ┌─────────────────────┐  │   │
 │  │  │ events[]  │  │                    │  │  pending[]          │  │   │
 │  │  └───────────┘  │                    │  └─────────────────────┘  │   │
@@ -131,29 +131,29 @@ func (r *SpannerRepository) Save(ctx context.Context, user *domain.User) error {
 }
 ```
 
-### 4. TransactionalEventBus
+### 4. TransactionalPublisher
 
 Buffers events and processes them synchronously during flush:
 
 ```go
-// internal/platform/eventbus/transactional.go
-type TransactionalEventBus struct {
+// internal/platform/eventbus/publisher.go
+type TransactionalPublisher struct {
     registry HandlerRegistry
     pending  []events.Event
     maxDepth int
 }
 
-func (b *TransactionalEventBus) Publish(ctx context.Context, event events.Event) error {
-    b.pending = append(b.pending, event)  // Buffer only
+func (p *TransactionalPublisher) Publish(ctx context.Context, event events.Event) error {
+    p.pending = append(p.pending, event)  // Buffer only
     return nil
 }
 
-func (b *TransactionalEventBus) Flush(ctx context.Context) error {
-    for len(b.pending) > 0 {
-        event := b.pending[0]
-        b.pending = b.pending[1:]
+func (p *TransactionalPublisher) Flush(ctx context.Context) error {
+    for len(p.pending) > 0 {
+        event := p.pending[0]
+        p.pending = p.pending[1:]
 
-        handlers := b.registry.HandlersFor(event.EventType())
+        handlers := p.registry.HandlersFor(event.EventType())
         for _, handler := range handlers {
             if err := handler.Handle(ctx, event); err != nil {
                 return err  // Caller should rollback
@@ -171,8 +171,8 @@ Putting it all together:
 ```go
 func (h *DeleteUserHandler) Handle(ctx context.Context, cmd DeleteUserCommand) error {
     return h.txScope.Execute(ctx, func(ctx context.Context) error {
-        // Create event bus inside closure for Spanner retry safety
-        eventBus := eventbus.NewTransactional(h.handlerRegistry, 10)
+        // Create publisher inside closure for Spanner retry safety
+        publisher := eventbus.NewTransactionalPublisher(h.handlerRegistry, 10)
 
         // 1. Load aggregate
         user, err := h.repo.FindByID(ctx, userID)
@@ -190,14 +190,14 @@ func (h *DeleteUserHandler) Handle(ctx context.Context, cmd DeleteUserCommand) e
             return err
         }
 
-        // 4. Collect events from aggregate and publish to bus
+        // 4. Collect events from aggregate and publish
         for _, event := range user.DomainEvents() {
-            eventBus.Publish(ctx, event)
+            publisher.Publish(ctx, event)
         }
         user.ClearDomainEvents()
 
         // 5. Flush events (handlers run within same transaction)
-        return eventBus.Flush(ctx)
+        return publisher.Flush(ctx)
     })
 }
 ```
@@ -225,19 +225,19 @@ For external side effects (notifications, etc.), use a separate async pattern (P
 
 ### 2. Event Bus Instance Per Retry
 
-Create `TransactionalEventBus` **inside** the transaction closure:
+Create `TransactionalPublisher` **inside** the transaction closure:
 
 ```go
 // CORRECT: Fresh instance on each retry
 txScope.Execute(ctx, func(ctx context.Context) error {
-    eventBus := eventbus.NewTransactional(registry, 10)  // New instance
+    publisher := eventbus.NewTransactionalPublisher(registry, 10)  // New instance
     // ...
 })
 
 // WRONG: Stale events from previous retry
-eventBus := eventbus.NewTransactional(registry, 10)  // Outside closure
+publisher := eventbus.NewTransactionalPublisher(registry, 10)  // Outside closure
 txScope.Execute(ctx, func(ctx context.Context) error {
-    // eventBus still has pending events from failed retry!
+    // publisher still has pending events from failed retry!
 })
 ```
 
@@ -269,10 +269,10 @@ event := NewUserDeletedEvent(user.ID(), user.Email(), user.Name())
 
 ### 4. Infinite Loop Prevention
 
-Event handlers may publish new events. The `TransactionalEventBus` includes depth limiting:
+Event handlers may publish new events. The `TransactionalPublisher` includes depth limiting:
 
 ```go
-eventBus := eventbus.NewTransactional(registry, 10)  // Max 10 nested events
+publisher := eventbus.NewTransactionalPublisher(registry, 10)  // Max 10 nested events
 ```
 
 If the limit is exceeded, `ErrEventProcessingDepthExceeded` is returned and the transaction rolls back.
@@ -316,7 +316,7 @@ Key points:
 For handlers with external side effects (email, Pub/Sub, etc.):
 
 ```go
-// This handler runs via InMemoryEventBus AFTER transaction commit
+// This handler runs via EventHandlerRegistry AFTER transaction commit
 type OrderSubmittedHandler struct {
     logger *slog.Logger
 }
@@ -342,7 +342,7 @@ The lightweight domain events pattern is designed to migrate smoothly to a full 
 ```
 Transaction {
     Save aggregate
-    TransactionalEventBus.Flush()  →  Handler executes in same tx
+    TransactionalPublisher.Flush()  →  Handler executes in same tx
 }
 ```
 
@@ -358,7 +358,7 @@ Transaction {
 
 The migration requires:
 
-1. Replace `TransactionalEventBus` with `OutboxEventBus` implementation
+1. Replace `TransactionalPublisher` with `OutboxPublisher` implementation
 2. Add outbox table and change stream / polling worker
 3. Update handlers for idempotency (event ID tracking)
 
@@ -375,7 +375,7 @@ The migration requires:
 | `AggregateRoot`         | Collect events during business operations         |
 | `TransactionScope`      | Manage transaction lifecycle                      |
 | `TxFromContext`         | Enable repositories to join existing transactions |
-| `TransactionalEventBus` | Buffer and flush events within transaction        |
+| `TransactionalPublisher` | Buffer and flush events within transaction        |
 | `HandlerRegistry`       | Lookup handlers for event types                   |
 
 This pattern achieves:

@@ -21,7 +21,6 @@ func (c Config) DSN() string {
 		c.ProjectID, c.InstanceID, c.DatabaseID)
 }
 
-// NewClient creates a new Spanner client from config.
 // The caller is responsible for closing the client when done.
 func NewClient(ctx context.Context, cfg Config) (*spanner.Client, error) {
 	client, err := spanner.NewClient(ctx, cfg.DSN())

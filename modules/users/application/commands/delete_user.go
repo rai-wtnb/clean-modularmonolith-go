@@ -43,8 +43,8 @@ func (h *DeleteUserHandler) Handle(ctx context.Context, cmd DeleteUserCommand) e
 	}
 
 	return h.txScope.Execute(ctx, func(ctx context.Context) error {
-		// Create event bus inside closure for Spanner retry safety
-		eventBus := eventbus.NewTransactional(h.handlerRegistry, 10)
+		// Create publisher inside closure for Spanner retry safety
+		publisher := eventbus.NewTransactionalPublisher(h.handlerRegistry, 10)
 
 		// 1. Load aggregate
 		user, err := h.repo.FindByID(ctx, userID)
@@ -62,16 +62,16 @@ func (h *DeleteUserHandler) Handle(ctx context.Context, cmd DeleteUserCommand) e
 			return fmt.Errorf("saving user: %w", err)
 		}
 
-		// 4. Collect events from aggregate and publish to bus
+		// 4. Collect events from aggregate and publish
 		for _, event := range user.DomainEvents() {
-			if err := eventBus.Publish(ctx, event); err != nil {
+			if err := publisher.Publish(ctx, event); err != nil {
 				return fmt.Errorf("publishing event: %w", err)
 			}
 		}
 		user.ClearDomainEvents()
 
 		// 5. Flush events (handlers run within same transaction)
-		if err := eventBus.Flush(ctx); err != nil {
+		if err := publisher.Flush(ctx); err != nil {
 			return fmt.Errorf("flushing events: %w", err)
 		}
 

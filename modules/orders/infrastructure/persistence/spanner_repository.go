@@ -10,27 +10,25 @@ import (
 	"google.golang.org/api/iterator"
 	"google.golang.org/grpc/codes"
 
-	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
+	platformspanner "github.com/rai/clean-modularmonolith-go/internal/platform/spanner"
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
 )
 
-// SpannerRepository implements OrderRepository using Cloud Spanner.
 type SpannerRepository struct {
 	client *spanner.Client
 }
 
-// NewSpannerRepository creates a new Spanner-backed order repository.
 func NewSpannerRepository(client *spanner.Client) *SpannerRepository {
 	return &SpannerRepository{client: client}
 }
 
+// Save persists an order.
+// It uses an existing transaction if available, otherwise creates a new one.
 func (r *SpannerRepository) Save(ctx context.Context, order *domain.Order) error {
-	// Use existing transaction if available
-	if txn, ok := transaction.TxFromContext(ctx); ok {
+	if txn, ok := platformspanner.TxFromContext(ctx); ok {
 		return r.saveWithTx(txn, order)
 	}
 
-	// Fallback: create own transaction (backward compatible)
 	_, err := r.client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
 		return r.saveWithTx(txn, order)
 	})
@@ -40,11 +38,11 @@ func (r *SpannerRepository) Save(ctx context.Context, order *domain.Order) error
 	return nil
 }
 
-func (r *SpannerRepository) saveWithTx(txn *spanner.ReadWriteTransaction, order *domain.Order) error {
+func (r *SpannerRepository) saveWithTx(tx *spanner.ReadWriteTransaction, order *domain.Order) error {
 	orderID := order.ID().String()
 
 	// Delete existing items first (handles item removal on update)
-	if err := txn.BufferWrite([]*spanner.Mutation{
+	if err := tx.BufferWrite([]*spanner.Mutation{
 		spanner.Delete("OrderItems", spanner.KeyRange{
 			Start: spanner.Key{orderID},
 			End:   spanner.Key{orderID},
@@ -85,7 +83,7 @@ func (r *SpannerRepository) saveWithTx(txn *spanner.ReadWriteTransaction, order 
 		))
 	}
 
-	return txn.BufferWrite(mutations)
+	return tx.BufferWrite(mutations)
 }
 
 func (r *SpannerRepository) FindByID(ctx context.Context, id domain.OrderID) (*domain.Order, error) {
@@ -223,7 +221,7 @@ func (r *SpannerRepository) Delete(ctx context.Context, id domain.OrderID) error
 	}
 
 	// Use existing transaction if available
-	if txn, ok := transaction.TxFromContext(ctx); ok {
+	if txn, ok := platformspanner.TxFromContext(ctx); ok {
 		return txn.BufferWrite(mutations)
 	}
 

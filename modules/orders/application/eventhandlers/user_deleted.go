@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
@@ -26,18 +27,14 @@ func NewUserDeletedHandler(orderRepo domain.OrderRepository, logger *slog.Logger
 }
 
 func (h *UserDeletedHandler) Handle(ctx context.Context, event events.Event) error {
-	userDeleted, ok := event.(contracts.UserDeletedEvent)
+	userDeletedEvent, ok := event.(contracts.UserDeletedEvent)
 	if !ok {
-		h.logger.Warn("unexpected event type", slog.String("expected", "UserDeletedEvent"))
-		return nil
+		return fmt.Errorf("unexpected event type: %T", event)
 	}
 
-	h.logger.Info("handling user deleted event, canceling user orders",
-		slog.String("user_id", userDeleted.UserID),
-	)
+	h.logger.Info("handling user deleted event, canceling user orders", slog.String("user_id", userDeletedEvent.UserID))
 
-	// Parse user reference
-	userRef, err := domain.NewUserRef(userDeleted.UserID)
+	userRef, err := domain.NewUserRef(userDeletedEvent.UserID)
 	if err != nil {
 		return fmt.Errorf("parsing user ID: %w", err)
 	}
@@ -49,27 +46,28 @@ func (h *UserDeletedHandler) Handle(ctx context.Context, event events.Event) err
 		return fmt.Errorf("finding user orders: %w", err)
 	}
 
-	// Cancel all cancellable orders
-	for _, order := range orders {
+	for order := range slices.Values(orders) {
 		// Only cancel orders that are in draft or pending status
-		if order.Status() == domain.StatusDraft || order.Status() == domain.StatusPending {
-			if err := order.Cancel(); err != nil {
-				h.logger.Warn("failed to cancel order",
-					slog.String("order_id", order.ID().String()),
-					slog.Any("error", err),
-				)
-				continue
-			}
-
-			if err := h.orderRepo.Save(ctx, order); err != nil {
-				return fmt.Errorf("saving canceled order %s: %w", order.ID().String(), err)
-			}
-
-			h.logger.Info("canceled order for deleted user",
-				slog.String("order_id", order.ID().String()),
-				slog.String("user_id", userDeleted.UserID),
-			)
+		if order.Status() != domain.StatusDraft && order.Status() != domain.StatusPending {
+			continue
 		}
+
+		if err := order.Cancel(); err != nil {
+			h.logger.Warn("failed to cancel order",
+				slog.String("order_id", order.ID().String()),
+				slog.Any("error", err),
+			)
+			continue
+		}
+
+		if err := h.orderRepo.Save(ctx, order); err != nil {
+			return fmt.Errorf("saving canceled order %s: %w", order.ID().String(), err)
+		}
+
+		h.logger.Info("canceled order for deleted user",
+			slog.String("order_id", order.ID().String()),
+			slog.String("user_id", userDeletedEvent.UserID),
+		)
 	}
 
 	return nil

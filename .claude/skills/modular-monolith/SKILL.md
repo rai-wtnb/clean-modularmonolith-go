@@ -282,24 +282,24 @@ func New(cfg Config) (*App, error) {
         return nil, fmt.Errorf("open database: %w", err)
     }
 
-    eventBus := eventbus.New()
     logger := slog.Default()
+    handlerRegistry := eventbus.NewEventHandlerRegistry(logger)
 
     // Initialize modules in dependency order
     usersModule, err := users.New(users.Dependencies{
-        DB:       db,
-        EventBus: eventBus,
-        Logger:   logger.With("module", "users"),
+        DB:              db,
+        HandlerRegistry: handlerRegistry,
+        Logger:          logger.With("module", "users"),
     })
     if err != nil {
         return nil, fmt.Errorf("init users module: %w", err)
     }
 
     ordersModule, err := orders.New(orders.Dependencies{
-        DB:          db,
-        EventBus:    eventBus,
-        UsersModule: usersModule, // Inject users module
-        Logger:      logger.With("module", "orders"),
+        DB:              db,
+        HandlerRegistry: handlerRegistry,
+        UsersModule:     usersModule, // Inject users module
+        Logger:          logger.With("module", "orders"),
     })
     if err != nil {
         return nil, fmt.Errorf("init orders module: %w", err)

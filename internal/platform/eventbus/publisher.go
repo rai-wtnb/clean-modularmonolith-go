@@ -13,7 +13,7 @@ import (
 // trigger too many nested events.
 var ErrEventProcessingDepthExceeded = errors.New("event processing depth exceeded")
 
-// TransactionalEventBus buffers events and processes them synchronously
+// TransactionalPublisher buffers events and processes them synchronously
 // within a transaction scope. Create a new instance per transaction.
 //
 // IMPORTANT: For Spanner retry safety, create this inside the transaction
@@ -22,25 +22,25 @@ var ErrEventProcessingDepthExceeded = errors.New("event processing depth exceede
 // Example:
 //
 //	txScope.Execute(ctx, func(ctx context.Context) error {
-//	    eventBus := eventbus.NewTransactional(registry, 10)
+//	    publisher := eventbus.NewTransactionalPublisher(registry, 10)
 //	    // ... business logic ...
-//	    eventBus.Publish(ctx, event)
-//	    return eventBus.Flush(ctx)
+//	    publisher.Publish(ctx, event)
+//	    return publisher.Flush(ctx)
 //	})
-type TransactionalEventBus struct {
+type TransactionalPublisher struct {
 	registry HandlerRegistry
 	pending  []events.Event
 	mu       sync.Mutex
 	maxDepth int
 }
 
-// NewTransactional creates a TransactionalEventBus with the given registry.
+// NewTransactionalPublisher creates a TransactionalPublisher with the given registry.
 // maxDepth limits nested event processing to prevent infinite loops (default: 10).
-func NewTransactional(registry HandlerRegistry, maxDepth int) *TransactionalEventBus {
+func NewTransactionalPublisher(registry HandlerRegistry, maxDepth int) *TransactionalPublisher {
 	if maxDepth <= 0 {
 		maxDepth = 10
 	}
-	return &TransactionalEventBus{
+	return &TransactionalPublisher{
 		registry: registry,
 		maxDepth: maxDepth,
 	}
@@ -49,7 +49,7 @@ func NewTransactional(registry HandlerRegistry, maxDepth int) *TransactionalEven
 // Publish buffers an event for later processing.
 // Events are not processed until Flush is called.
 // Implements events.Publisher.
-func (b *TransactionalEventBus) Publish(ctx context.Context, event events.Event) error {
+func (b *TransactionalPublisher) Publish(ctx context.Context, event events.Event) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.pending = append(b.pending, event)
@@ -59,7 +59,7 @@ func (b *TransactionalEventBus) Publish(ctx context.Context, event events.Event)
 // Flush processes all buffered events synchronously.
 // Handlers may publish additional events, which are processed in the same flush.
 // Returns error if any handler fails (caller should rollback transaction).
-func (b *TransactionalEventBus) Flush(ctx context.Context) error {
+func (b *TransactionalPublisher) Flush(ctx context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -92,11 +92,11 @@ func (b *TransactionalEventBus) Flush(ctx context.Context) error {
 }
 
 // PendingCount returns the number of buffered events (useful for testing).
-func (b *TransactionalEventBus) PendingCount() int {
+func (b *TransactionalPublisher) PendingCount() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return len(b.pending)
 }
 
 // Compile-time interface check.
-var _ events.Publisher = (*TransactionalEventBus)(nil)
+var _ events.Publisher = (*TransactionalPublisher)(nil)
