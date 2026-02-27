@@ -58,32 +58,95 @@ Behind this single method lies domain logic, validation, persistence, event publ
 
 The alternative — exposing `CreateUser()`, `GetUser()`, `UpdateUser()` — would be a "shallow module" that pushes complexity onto callers and creates tight coupling.
 
-### 2. Transactional Domain Events
+### 2. Transaction Scope — Deep Module by Design
 
-Events and database changes must be atomic. If the transaction fails, no events should be published. This implementation uses a **transactional event bus**:
+Transaction management is this project's most deliberate application of Ousterhout's Deep Module principle. The entire public interface is one method:
 
 ```go
-// EventBus is injected into command handlers
-type CreateUserHandler struct {
-    repo      domain.UserRepository
-    txScope   transaction.TransactionScope
-    publisher events.Publisher  // EventBus implements this
+// modules/shared/transaction/scope.go — The port
+type Scope interface {
+    Execute(ctx context.Context, fn func(ctx context.Context) error) error
 }
-
-func (h *CreateUserHandler) Handle(ctx context.Context, cmd CreateUserCommand) error {
-    return h.txScope.Execute(ctx, func(ctx context.Context) error {
-        user := domain.NewUser(email, name)  // Collects UserCreatedEvent
-        h.repo.Save(ctx, user)
-
-        return h.publisher.Publish(ctx, user.PopDomainEvents()...)  // Handlers run immediately
-    })
-}
-// Transaction commits only if everything succeeds
 ```
 
-Handlers execute synchronously within the transaction. If any handler fails, the entire transaction rolls back. This eliminates the "event published but data not saved" inconsistency.
+Behind this single method, the implementation absorbs substantial complexity that callers never see:
 
-### 3. Aggregates Collect Their Own Events
+```
+                    transaction.Scope
+                 ┌──────────────────────┐
+  Simple         │  Execute(ctx, fn)    │
+  Interface      └──────────┬───────────┘
+                            │
+  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┼ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+                            │
+  Deep           ┌──────────▼───────────────────────────────┐
+  Implementation │  Begin / Commit / Rollback lifecycle     │
+                 │  Spanner retry on Aborted errors         │
+                 │  Transaction propagation via context      │
+                 │  Nested transaction prevention            │
+                 │  Read-your-writes consistency             │
+                 │  ReadOnly vs ReadWrite strategy           │
+                 └──────────────────────────────────────────┘
+```
+
+**Why this matters:** Command handlers are completely unaware of Spanner. They call `Execute`, pass a function, and get atomicity. The transaction is embedded in `ctx` — repositories extract it automatically, event handlers participate in it transparently.
+
+```go
+// Command handler — knows nothing about Spanner, retries, or transaction propagation
+func (h *CreateUserHandler) Handle(ctx context.Context, cmd CreateUserCommand) (string, error) {
+    email, _ := domain.NewEmail(cmd.Email)  // Validate outside transaction
+    name, _ := domain.NewName(cmd.FirstName, cmd.LastName)
+
+    return transaction.ExecuteWithResult(ctx, h.txScope, func(ctx context.Context) (string, error) {
+        h.repo.Exists(ctx, email)           // ← Reads within transaction (via context)
+        user := domain.NewUser(email, name)
+        h.repo.Save(ctx, user)              // ← Buffers write in transaction (via context)
+        h.publisher.Publish(ctx, ...)       // ← Event handlers join same transaction (via context)
+        return user.ID().String(), nil
+    })
+    // Transaction commits if nil, rolls back otherwise
+}
+```
+
+**The layered abstraction (Clean Architecture dependency rule):**
+
+```
+  modules/shared/transaction/       ← Port (interface)
+  Command handlers depend on this     No infrastructure knowledge
+          │
+          │ implements
+          ▼
+  internal/platform/spanner/        ← Adapter (implementation)
+  ReadWriteTransactionScope           Spanner-specific lifecycle
+  ReadOnlyTransactionScope            Retry logic, context embedding
+          │
+          │ uses
+          ▼
+  context.go                        ← Invisible plumbing
+  withReadWriteTx(ctx, tx)            Embeds transaction in context
+  ReadTransactionFromContext(ctx)      Unifies RW/RO via ReadTransaction interface
+```
+
+Repositories check `ReadWriteTxFromContext(ctx)` for writes and `ReadTransactionFromContext(ctx)` for reads. If a transaction exists in context, they participate. If not, they fall back to standalone operations. This means repositories work both inside and outside transactions — no dual codepath required.
+
+### 3. Transactional Domain Events
+
+Events and state changes must be atomic. This implementation publishes events **within the same transaction**:
+
+```go
+return transaction.ExecuteWithResult(ctx, h.txScope, func(ctx context.Context) (string, error) {
+    user := domain.NewUser(email, name)
+    h.repo.Save(ctx, user)
+    h.publisher.Publish(ctx, user.PopDomainEvents()...)  // Handlers run immediately
+    return user.ID().String(), nil
+})
+// If any handler fails → entire transaction rolls back
+// If commit fails → no events were "published" externally
+```
+
+Event handlers receive the same `ctx` containing the active transaction. They can read and write within that transaction, ensuring cross-module consistency without distributed coordination.
+
+### 4. Aggregates Collect Their Own Events
 
 The aggregate knows which events should occur when business rules execute:
 
@@ -97,7 +160,7 @@ func (u *User) Delete() error {
 
 This keeps business logic cohesive — the aggregate, not the application service, decides what events to emit.
 
-### 4. Event Contracts as Public API
+### 5. Event Contracts as Public API
 
 Modules don't import each other's domain packages. Instead, event contracts are published in a shared kernel:
 
@@ -113,7 +176,7 @@ type UserDeletedEvent struct {
 
 The orders module subscribes to `UserDeletedEvent` without knowing anything about the users module's internals. This is an **Anti-Corruption Layer by design**.
 
-### 5. Value Objects Validate at Construction
+### 6. Value Objects Validate at Construction
 
 Invalid data never enters the domain:
 
@@ -132,7 +195,7 @@ func NewEmail(raw string) (Email, error) {
 
 Once you have an `Email`, it's guaranteed valid. No defensive checks needed downstream.
 
-### 6. Reconstitution Separates Creation from Hydration
+### 7. Reconstitution Separates Creation from Hydration
 
 Two ways to get an aggregate:
 
