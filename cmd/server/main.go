@@ -52,9 +52,9 @@ func main() {
 	// Initialize transaction scope for transactional operations
 	txScope := spanner.NewTransactionScope(spannerClient)
 
-	// Initialize event handler registry (for inter-module communication)
-	// Manages handler subscriptions and serves as HandlerRegistry for TransactionalEventBus
-	handlerRegistry := eventbus.NewEventHandlerRegistry(logger)
+	// Initialize event bus (for inter-module communication)
+	// Implements both events.Publisher and events.Subscriber
+	eventBus := eventbus.NewEventBus(logger)
 
 	// Initialize repositories
 	usersRepo := userspersistence.NewSpannerRepository(spannerClient)
@@ -65,15 +65,15 @@ func main() {
 	usersCfg := users.Config{
 		Repository:       usersRepo,
 		TransactionScope: txScope,
-		HandlerRegistry:  handlerRegistry,
+		Publisher:        eventBus,
 	}
 	usersModule := users.New(usersCfg)
 
 	ordersCfg := orders.Config{
 		Repository:       ordersRepo,
 		TransactionScope: txScope,
-		HandlerRegistry:  handlerRegistry,
-		EventSubscriber:  handlerRegistry,
+		Publisher:        eventBus,
+		Subscriber:       eventBus,
 		Logger:           logger,
 	}
 	ordersModule := orders.New(ordersCfg)
@@ -81,7 +81,7 @@ func main() {
 	// Notifications module subscribes to events but runs outside transactions
 	// (external side effects like email should not be in DB transactions)
 	notificationCfg := notifications.Config{
-		EventSubscriber: handlerRegistry,
+		EventSubscriber: eventBus,
 		Logger:          logger,
 	}
 	_ = notifications.New(notificationCfg)

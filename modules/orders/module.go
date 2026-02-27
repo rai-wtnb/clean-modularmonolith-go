@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/rai/clean-modularmonolith-go/internal/platform/eventbus"
 	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/orders/application/commands"
 	"github.com/rai/clean-modularmonolith-go/modules/orders/application/eventhandlers"
@@ -29,8 +28,8 @@ type Module interface {
 type Config struct {
 	Repository       domain.OrderRepository
 	TransactionScope transaction.TransactionScope
-	HandlerRegistry  eventbus.HandlerRegistry
-	EventSubscriber  events.Subscriber
+	Publisher        events.Publisher
+	Subscriber       events.Subscriber
 	Logger           *slog.Logger
 }
 
@@ -52,18 +51,18 @@ func New(cfg Config) Module {
 	}
 	logger = logger.With("module", "orders")
 
-	createOrderHandler := commands.NewCreateOrderHandler(cfg.Repository, cfg.TransactionScope, cfg.HandlerRegistry)
+	createOrderHandler := commands.NewCreateOrderHandler(cfg.Repository, cfg.TransactionScope, cfg.Publisher)
 	addItemHandler := commands.NewAddItemHandler(cfg.Repository)
 	removeItemHandler := commands.NewRemoveItemHandler(cfg.Repository)
-	submitOrderHandler := commands.NewSubmitOrderHandler(cfg.Repository, cfg.TransactionScope, cfg.HandlerRegistry)
-	cancelOrderHandler := commands.NewCancelOrderHandler(cfg.Repository, cfg.TransactionScope, cfg.HandlerRegistry)
+	submitOrderHandler := commands.NewSubmitOrderHandler(cfg.Repository, cfg.TransactionScope, cfg.Publisher)
+	cancelOrderHandler := commands.NewCancelOrderHandler(cfg.Repository, cfg.TransactionScope, cfg.Publisher)
 
 	getOrderHandler := queries.NewGetOrderHandler(cfg.Repository)
 	listUserOrdersHandler := queries.NewListUserOrdersHandler(cfg.Repository)
 
-	if cfg.EventSubscriber != nil {
+	if cfg.Subscriber != nil {
 		userDeletedHandler := eventhandlers.NewUserDeletedHandler(cfg.Repository, logger)
-		if err := cfg.EventSubscriber.Subscribe(contracts.UserDeletedEventType, userDeletedHandler); err != nil {
+		if err := cfg.Subscriber.Subscribe(contracts.UserDeletedEventType, userDeletedHandler); err != nil {
 			logger.Error("failed to subscribe to user deleted event", slog.Any("error", err))
 		}
 	}

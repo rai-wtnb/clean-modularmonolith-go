@@ -22,8 +22,7 @@ If the handler fails, the original change is already committed, leading to incon
   txScope.Execute() {
       aggregate.BusinessMethod()   // Events collected internally
       repo.Save()                  // Same transaction
-      eventBus.Publish()           // Buffering only
-      eventBus.Flush()             // Handlers execute in same transaction
+      eventBus.Publish()           // Handlers execute immediately in same transaction
   } // COMMIT - all or nothing
 ```
 
@@ -32,26 +31,25 @@ If the handler fails, the original change is already committed, leading to incon
 The implementation combines three patterns:
 
 1. **Aggregate-collected Events**: Aggregates collect domain events internally during business operations
-2. **Transaction-scoped Event Bus**: Events are buffered and flushed synchronously within a transaction
+2. **Transaction-scoped Event Bus**: Events trigger handlers synchronously within a transaction
 3. **Context-based Transaction Propagation**: Transaction is embedded in context for repositories
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                           TransactionScope                               │
 │  ┌─────────────────┐                    ┌───────────────────────────┐   │
-│  │   Aggregate     │  DomainEvents()    │  TransactionalPublisher   │   │
-│  │  ┌───────────┐  │ ─────────────────► │  ┌─────────────────────┐  │   │
-│  │  │ events[]  │  │                    │  │  pending[]          │  │   │
-│  │  └───────────┘  │                    │  └─────────────────────┘  │   │
+│  │   Aggregate     │  PopDomainEvents() │       EventBus            │   │
+│  │  ┌───────────┐  │ ─────────────────► │                           │   │
+│  │  │ events[]  │  │                    │  Publish() executes       │   │
+│  │  └───────────┘  │                    │  handlers immediately     │   │
 │  └─────────────────┘                    │            │              │   │
-│         │                               │            │ Flush()      │   │
-│         │ Save()                        │            ▼              │   │
-│         ▼                               │  ┌─────────────────────┐  │   │
-│  ┌─────────────────┐                    │  │  Handler A          │  │   │
-│  │  Repository     │◄───────────────────│  │  (same ctx = tx)    │  │   │
-│  │  (TxFromCtx)    │                    │  └─────────────────────┘  │   │
-│  └─────────────────┘                    │            │              │   │
-│                                         │            ▼              │   │
+│         │                               │            ▼              │   │
+│         │ Save()                        │  ┌─────────────────────┐  │   │
+│         ▼                               │  │  Handler A          │  │   │
+│  ┌─────────────────┐                    │  │  (same ctx = tx)    │  │   │
+│  │  Repository     │◄───────────────────│  └─────────────────────┘  │   │
+│  │  (TxFromCtx)    │                    │            │              │   │
+│  └─────────────────┘                    │            ▼              │   │
 │                                         │  ┌─────────────────────┐  │   │
 │                                         │  │  Handler B          │  │   │
 │                                         │  └─────────────────────┘  │   │
@@ -72,8 +70,7 @@ type AggregateRoot struct {
 }
 
 func (a *AggregateRoot) AddDomainEvent(event events.Event)
-func (a *AggregateRoot) DomainEvents() []events.Event
-func (a *AggregateRoot) ClearDomainEvents()
+func (a *AggregateRoot) PopDomainEvents() []events.Event
 ```
 
 Usage in aggregate:
@@ -131,49 +128,50 @@ func (r *SpannerRepository) Save(ctx context.Context, user *domain.User) error {
 }
 ```
 
-### 4. TransactionalPublisher
+### 4. EventBus
 
-Buffers events and processes them synchronously during flush:
+Implements both `events.Publisher` and `events.Subscriber`. Executes handlers synchronously when `Publish()` is called, with depth tracking via context:
 
 ```go
-// internal/platform/eventbus/publisher.go
-type TransactionalPublisher struct {
-    registry HandlerRegistry
-    pending  []events.Event
+// internal/platform/eventbus/eventbus.go
+type EventBus struct {
+    mu       sync.RWMutex
+    handlers map[events.EventType][]events.Handler
+    logger   *slog.Logger
     maxDepth int
 }
 
-func (p *TransactionalPublisher) Publish(ctx context.Context, event events.Event) error {
-    p.pending = append(p.pending, event)  // Buffer only
-    return nil
-}
+func (b *EventBus) Publish(ctx context.Context, events ...events.Event) error {
+    depth := b.depthFromContext(ctx)
+    if depth >= b.maxDepth {
+        return ErrEventProcessingDepthExceeded
+    }
+    ctx = context.WithValue(ctx, depthKey{}, depth+1)
 
-func (p *TransactionalPublisher) Flush(ctx context.Context) error {
-    for len(p.pending) > 0 {
-        event := p.pending[0]
-        p.pending = p.pending[1:]
-
-        handlers := p.registry.HandlersFor(event.EventType())
-        for _, handler := range handlers {
-            if err := handler.Handle(ctx, event); err != nil {
-                return err  // Caller should rollback
-            }
+    for _, handler := range b.handlersFor(event.EventType()) {
+        if err := handler.Handle(ctx, event); err != nil {
+            return err  // Caller should rollback
         }
     }
     return nil
 }
 ```
 
+Depth is tracked per-context, so concurrent transactions are isolated. A single `EventBus` instance is shared across the application.
+
 ### 5. Command Handler Integration
 
 Putting it all together:
 
 ```go
+type DeleteUserHandler struct {
+    repo      domain.UserRepository
+    txScope   transaction.TransactionScope
+    publisher events.Publisher  // EventBus injected here
+}
+
 func (h *DeleteUserHandler) Handle(ctx context.Context, cmd DeleteUserCommand) error {
     return h.txScope.Execute(ctx, func(ctx context.Context) error {
-        // Create publisher inside closure for Spanner retry safety
-        publisher := eventbus.NewTransactionalPublisher(h.handlerRegistry, 10)
-
         // 1. Load aggregate
         user, err := h.repo.FindByID(ctx, userID)
         if err != nil {
@@ -190,14 +188,12 @@ func (h *DeleteUserHandler) Handle(ctx context.Context, cmd DeleteUserCommand) e
             return err
         }
 
-        // 4. Collect events from aggregate and publish
-        for _, event := range user.DomainEvents() {
-            publisher.Publish(ctx, event)
+        // 4. Publish events (handlers execute immediately within same transaction)
+        if err := h.publisher.Publish(ctx, user.PopDomainEvents()...); err != nil {
+            return err
         }
-        user.ClearDomainEvents()
 
-        // 5. Flush events (handlers run within same transaction)
-        return publisher.Flush(ctx)
+        return nil
     })
 }
 ```
@@ -223,23 +219,13 @@ These operations cannot be rolled back and will be duplicated on retry.
 
 For external side effects (notifications, etc.), use a separate async pattern (Pub/Sub subscription) outside the transaction. See the `notifications` module for an example approach.
 
-### 2. Event Bus Instance Per Retry
+### 2. Context-based Depth Tracking
 
-Create `TransactionalPublisher` **inside** the transaction closure:
+The `EventBus` tracks event processing depth via context, not instance state. This means:
 
-```go
-// CORRECT: Fresh instance on each retry
-txScope.Execute(ctx, func(ctx context.Context) error {
-    publisher := eventbus.NewTransactionalPublisher(registry, 10)  // New instance
-    // ...
-})
-
-// WRONG: Stale events from previous retry
-publisher := eventbus.NewTransactionalPublisher(registry, 10)  // Outside closure
-txScope.Execute(ctx, func(ctx context.Context) error {
-    // publisher still has pending events from failed retry!
-})
-```
+- A single `EventBus` instance is shared across the application
+- Each transaction context starts with depth 0
+- Spanner retries automatically reset the context, so depth is correctly reset
 
 ### 3. BufferWrite vs DML (Read-Your-Writes)
 
@@ -269,13 +255,9 @@ event := NewUserDeletedEvent(user.ID(), user.Email(), user.Name())
 
 ### 4. Infinite Loop Prevention
 
-Event handlers may publish new events. The `TransactionalPublisher` includes depth limiting:
+Event handlers may publish new events (depth-first execution). The `EventBus` tracks call stack depth via context (max 10 levels by default).
 
-```go
-publisher := eventbus.NewTransactionalPublisher(registry, 10)  // Max 10 nested events
-```
-
-If the limit is exceeded, `ErrEventProcessingDepthExceeded` is returned and the transaction rolls back.
+If a handler publishes an event, its handlers execute immediately (nested). If the nesting depth exceeds the limit, `ErrEventProcessingDepthExceeded` is returned and the transaction rolls back.
 
 ## Event Handler Guidelines
 
@@ -316,7 +298,7 @@ Key points:
 For handlers with external side effects (email, Pub/Sub, etc.):
 
 ```go
-// This handler runs via EventHandlerRegistry AFTER transaction commit
+// This handler runs via EventBus AFTER transaction commit
 type OrderSubmittedHandler struct {
     logger *slog.Logger
 }
@@ -342,7 +324,7 @@ The lightweight domain events pattern is designed to migrate smoothly to a full 
 ```
 Transaction {
     Save aggregate
-    TransactionalPublisher.Flush()  →  Handler executes in same tx
+    TransactionalPublisher.Publish()  →  Handler executes in same tx
 }
 ```
 
@@ -351,7 +333,7 @@ Transaction {
 ```
 Transaction {
     Save aggregate
-    OutboxEventBus.Flush()  →  Save events to outbox table
+    OutboxPublisher.Publish()  →  Save events to outbox table
 }
 // Later: Change stream / polling reads outbox and publishes to Pub/Sub
 ```
@@ -370,13 +352,12 @@ The migration requires:
 
 ## Summary
 
-| Component               | Responsibility                                    |
-| ----------------------- | ------------------------------------------------- |
-| `AggregateRoot`         | Collect events during business operations         |
-| `TransactionScope`      | Manage transaction lifecycle                      |
-| `TxFromContext`         | Enable repositories to join existing transactions |
-| `TransactionalPublisher` | Buffer and flush events within transaction        |
-| `HandlerRegistry`       | Lookup handlers for event types                   |
+| Component          | Responsibility                                    |
+| ------------------ | ------------------------------------------------- |
+| `AggregateRoot`    | Collect events during business operations         |
+| `TransactionScope` | Manage transaction lifecycle                      |
+| `TxFromContext`    | Enable repositories to join existing transactions |
+| `EventBus`         | Subscribe handlers and publish events synchronously |
 
 This pattern achieves:
 

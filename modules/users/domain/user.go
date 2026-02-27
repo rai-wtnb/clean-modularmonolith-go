@@ -26,12 +26,13 @@ type User struct {
 // Adds UserCreatedEvent to be dispatched after persistence.
 func NewUser(email Email, name Name) *User {
 	u := &User{
-		id:        NewUserID(),
-		email:     email,
-		name:      name,
-		status:    StatusActive,
-		createdAt: time.Now().UTC(),
-		updatedAt: time.Now().UTC(),
+		AggregateRoot: shareddomain.NewAggregateRoot(),
+		id:            NewUserID(),
+		email:         email,
+		name:          name,
+		status:        StatusActive,
+		createdAt:     time.Now().UTC(),
+		updatedAt:     time.Now().UTC(),
 	}
 	u.AddDomainEvent(NewUserCreatedEvent(u))
 	return u
@@ -111,7 +112,7 @@ func (u *User) Activate() error {
 func (u *User) Delete() error {
 	u.status = StatusDeleted
 	u.updatedAt = time.Now().UTC()
-	u.AddDomainEvent(NewUserDeletedEvent(u.id))
+	u.AddDomainEvent(newUserDeletedEvent(u.id))
 	return nil
 }
 

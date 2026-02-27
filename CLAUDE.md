@@ -52,9 +52,9 @@ modules/{name}/
 
 **Domain Encapsulation**: Aggregates use private fields with factory functions (`NewUser`) and reconstitution (`Reconstitute`) for persistence hydration.
 
-**Event-Driven Communication**: Modules publish domain events via `events.Publisher`. Other modules subscribe via `events.Subscriber`. The event system has two components:
-- `EventHandlerRegistry`: Implements `Subscriber` and `HandlerRegistry` (handler registration/management)
-- `TransactionalPublisher`: Implements `Publisher` (buffers events, processes on Flush within transactions)
+**Event-Driven Communication**: Modules publish domain events via `events.Publisher`. Other modules subscribe via `events.Subscriber`. The `EventBus` struct implements both interfaces:
+- `Subscribe`: Register handlers for event types (called at module initialization)
+- `Publish`: Execute handlers synchronously within the current transaction context
 
 **CQRS**: Commands (writes) and queries (reads) are separate handlers in the application layer. Commands typically return only IDs; queries return DTOs.
 

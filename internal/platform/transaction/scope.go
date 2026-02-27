@@ -12,3 +12,22 @@ type TransactionScope interface {
 	// The ctx passed to fn contains the transaction for repositories to use.
 	Execute(ctx context.Context, fn func(ctx context.Context) error) error
 }
+
+// ExecuteWithResult runs fn within a transaction and returns the result.
+// This is a generic helper that wraps TransactionScope.Execute for cases
+// where the transaction needs to return a value.
+func ExecuteWithResult[T any](ctx context.Context, scope TransactionScope, fn func(ctx context.Context) (T, error)) (T, error) {
+	var result T
+	err := scope.Execute(ctx, func(ctx context.Context) error {
+		var fnErr error
+		result, fnErr = fn(ctx)
+		return fnErr
+	})
+	return result, err
+}
+
+// この設計の利点:
+// - 実装側の変更不要: 既存の TransactionScope 実装をそのまま使える
+// - 型安全: ジェネリクスの恩恵を受けられる
+// - Goの制約に準拠: インターフェースにジェネリックメソッドを追加できない制約を回避
+// これはGoでよく使われるパターンで、標準ライブラリでも sort.Slice などが同様のアプローチを取っています。

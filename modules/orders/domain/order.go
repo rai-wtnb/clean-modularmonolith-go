@@ -36,13 +36,14 @@ func (i OrderItem) Subtotal() Money {
 // Adds OrderCreatedEvent to be dispatched after persistence.
 func NewOrder(userRef UserRef) *Order {
 	o := &Order{
-		id:        NewOrderID(),
-		userRef:   userRef,
-		items:     make([]OrderItem, 0),
-		status:    StatusDraft,
-		total:     MustNewMoney(0, "USD"),
-		createdAt: time.Now().UTC(),
-		updatedAt: time.Now().UTC(),
+		AggregateRoot: shareddomain.NewAggregateRoot(),
+		id:            NewOrderID(),
+		userRef:       userRef,
+		items:         make([]OrderItem, 0),
+		status:        StatusDraft,
+		total:         MustNewMoney(0, "USD"),
+		createdAt:     time.Now().UTC(),
+		updatedAt:     time.Now().UTC(),
 	}
 	o.AddDomainEvent(NewOrderCreatedEvent(o))
 	return o
@@ -70,13 +71,13 @@ func Reconstitute(
 
 // Getters
 
-func (o *Order) ID() OrderID      { return o.id }
-func (o *Order) UserRef() UserRef { return o.userRef }
-func (o *Order) Items() []OrderItem       { return o.items }
-func (o *Order) Status() Status           { return o.status }
-func (o *Order) Total() Money       { return o.total }
-func (o *Order) CreatedAt() time.Time     { return o.createdAt }
-func (o *Order) UpdatedAt() time.Time     { return o.updatedAt }
+func (o *Order) ID() OrderID          { return o.id }
+func (o *Order) UserRef() UserRef     { return o.userRef }
+func (o *Order) Items() []OrderItem   { return o.items }
+func (o *Order) Status() Status       { return o.status }
+func (o *Order) Total() Money         { return o.total }
+func (o *Order) CreatedAt() time.Time { return o.createdAt }
+func (o *Order) UpdatedAt() time.Time { return o.updatedAt }
 
 // Business methods
 

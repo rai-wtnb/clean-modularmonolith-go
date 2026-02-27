@@ -9,10 +9,8 @@ import (
 const (
 	OrderCreatedEventType   events.EventType = "orders.OrderCreated"
 	OrderCancelledEventType events.EventType = "orders.OrderCancelled"
+	OrderSubmittedEventType                  = contracts.OrderSubmittedEventType
 )
-
-// Re-export cross-module event type from contracts
-const OrderSubmittedEventType = contracts.OrderSubmittedEventType
 
 // OrderCreatedEvent is published when a new order is created.
 type OrderCreatedEvent struct {
@@ -29,11 +27,8 @@ func NewOrderCreatedEvent(order *Order) OrderCreatedEvent {
 	}
 }
 
-// OrderSubmittedEvent is a type alias for the cross-module contract.
-type OrderSubmittedEvent = contracts.OrderSubmittedEvent
-
-func NewOrderSubmittedEvent(order *Order) OrderSubmittedEvent {
-	return OrderSubmittedEvent{
+func NewOrderSubmittedEvent(order *Order) contracts.OrderSubmittedEvent {
+	return contracts.OrderSubmittedEvent{
 		BaseEvent:   events.NewBaseEvent(OrderSubmittedEventType, order.ID().String()),
 		OrderID:     order.ID().String(),
 		UserID:      order.UserRef().String(),

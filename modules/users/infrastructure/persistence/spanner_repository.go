@@ -94,24 +94,6 @@ func (r *SpannerRepository) FindByEmail(ctx context.Context, email domain.Email)
 	return r.scanUser(row)
 }
 
-func (r *SpannerRepository) Delete(ctx context.Context, id domain.UserID) error {
-	mutations := []*spanner.Mutation{
-		spanner.Delete("Users", spanner.Key{id.String()}),
-	}
-
-	// Use existing transaction if available
-	if txn, ok := platformspanner.TxFromContext(ctx); ok {
-		return txn.BufferWrite(mutations)
-	}
-
-	// Fallback: standalone mutation (backward compatible)
-	_, err := r.client.Apply(ctx, mutations)
-	if err != nil {
-		return fmt.Errorf("failed to delete user: %w", err)
-	}
-	return nil
-}
-
 func (r *SpannerRepository) Exists(ctx context.Context, email domain.Email) (bool, error) {
 	stmt := spanner.Statement{
 		SQL:    `SELECT 1 FROM Users@{FORCE_INDEX=UsersByEmail} WHERE Email = @email LIMIT 1`,

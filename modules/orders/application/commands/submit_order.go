@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rai/clean-modularmonolith-go/internal/platform/eventbus"
 	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
 )
 
 // SubmitOrderCommand submits an order for processing.
@@ -15,20 +15,20 @@ type SubmitOrderCommand struct {
 }
 
 type SubmitOrderHandler struct {
-	repo            domain.OrderRepository
-	txScope         transaction.TransactionScope
-	handlerRegistry eventbus.HandlerRegistry
+	repo      domain.OrderRepository
+	txScope   transaction.TransactionScope
+	publisher events.Publisher
 }
 
 func NewSubmitOrderHandler(
 	repo domain.OrderRepository,
 	txScope transaction.TransactionScope,
-	handlerRegistry eventbus.HandlerRegistry,
+	publisher events.Publisher,
 ) *SubmitOrderHandler {
 	return &SubmitOrderHandler{
-		repo:            repo,
-		txScope:         txScope,
-		handlerRegistry: handlerRegistry,
+		repo:      repo,
+		txScope:   txScope,
+		publisher: publisher,
 	}
 }
 
@@ -46,7 +46,6 @@ func (h *SubmitOrderHandler) Handle(ctx context.Context, cmd SubmitOrderCommand)
 	}
 
 	return h.txScope.Execute(ctx, func(ctx context.Context) error {
-		publisher := eventbus.NewTransactionalPublisher(h.handlerRegistry, 10)
 
 		order, err := h.repo.FindByID(ctx, orderID)
 		if err != nil {
@@ -61,15 +60,8 @@ func (h *SubmitOrderHandler) Handle(ctx context.Context, cmd SubmitOrderCommand)
 			return fmt.Errorf("saving order: %w", err)
 		}
 
-		for _, event := range order.DomainEvents() {
-			if err := publisher.Publish(ctx, event); err != nil {
-				return fmt.Errorf("publishing event: %w", err)
-			}
-		}
-		order.ClearDomainEvents()
-
-		if err := publisher.Flush(ctx); err != nil {
-			return fmt.Errorf("flushing events: %w", err)
+		if err := h.publisher.Publish(ctx, order.PopDomainEvents()...); err != nil {
+			return fmt.Errorf("publishing events: %w", err)
 		}
 
 		return nil

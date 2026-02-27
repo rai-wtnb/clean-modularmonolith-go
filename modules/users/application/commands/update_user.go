@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rai/clean-modularmonolith-go/internal/platform/eventbus"
 	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
@@ -18,20 +18,20 @@ type UpdateUserCommand struct {
 
 // UpdateUserHandler handles the UpdateUserCommand.
 type UpdateUserHandler struct {
-	repo            domain.UserRepository
-	txScope         transaction.TransactionScope
-	handlerRegistry eventbus.HandlerRegistry
+	repo      domain.UserRepository
+	txScope   transaction.TransactionScope
+	publisher events.Publisher
 }
 
 func NewUpdateUserHandler(
 	repo domain.UserRepository,
 	txScope transaction.TransactionScope,
-	handlerRegistry eventbus.HandlerRegistry,
+	publisher events.Publisher,
 ) *UpdateUserHandler {
 	return &UpdateUserHandler{
-		repo:            repo,
-		txScope:         txScope,
-		handlerRegistry: handlerRegistry,
+		repo:      repo,
+		txScope:   txScope,
+		publisher: publisher,
 	}
 }
 
@@ -49,39 +49,25 @@ func (h *UpdateUserHandler) Handle(ctx context.Context, cmd UpdateUserCommand) e
 		return fmt.Errorf("invalid name: %w", err)
 	}
 
-	return h.txScope.Execute(ctx, func(ctx context.Context) error {
-		// Create publisher inside closure for Spanner retry safety
-		publisher := eventbus.NewTransactionalPublisher(h.handlerRegistry, 10)
-
-		// Load aggregate
+	fn := func(ctx context.Context) error {
 		user, err := h.repo.FindByID(ctx, userID)
 		if err != nil {
 			return fmt.Errorf("finding user: %w", err)
 		}
 
-		// Execute business logic (adds UserUpdatedEvent internally)
 		if err := user.UpdateProfile(name); err != nil {
 			return fmt.Errorf("updating profile: %w", err)
 		}
 
-		// Persist changes
 		if err := h.repo.Save(ctx, user); err != nil {
 			return fmt.Errorf("saving user: %w", err)
 		}
 
-		// Collect events from aggregate and publish
-		for _, event := range user.DomainEvents() {
-			if err := publisher.Publish(ctx, event); err != nil {
-				return fmt.Errorf("publishing event: %w", err)
-			}
-		}
-		user.ClearDomainEvents()
-
-		// Flush events (handlers run within same transaction)
-		if err := publisher.Flush(ctx); err != nil {
-			return fmt.Errorf("flushing events: %w", err)
+		if err := h.publisher.Publish(ctx, user.PopDomainEvents()...); err != nil {
+			return fmt.Errorf("publishing events: %w", err)
 		}
 
 		return nil
-	})
+	}
+	return h.txScope.Execute(ctx, fn)
 }

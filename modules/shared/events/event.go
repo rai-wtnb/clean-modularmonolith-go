@@ -1,6 +1,3 @@
-// Package events provides domain event infrastructure for inter-module communication.
-// Events enable loose coupling between modules - modules publish events without
-// knowing who will handle them.
 package events
 
 import (
@@ -31,8 +28,7 @@ func (t EventType) String() string {
 	return string(t)
 }
 
-// Event represents a domain event that occurred in the system.
-// Events are immutable facts about something that happened.
+// Event represents a domain event.
 type Event interface {
 	// EventID returns the unique identifier for this event instance.
 	EventID() string
@@ -44,12 +40,12 @@ type Event interface {
 	AggregateID() string
 }
 
-// BaseEvent provides common event fields. Embed this in concrete event types.
+// BaseEvent provides common event fields that implements Event interface. Embed this in concrete event types.
 type BaseEvent struct {
-	ID          string    `json:"id"`
-	Type        EventType `json:"type"`
-	Timestamp   time.Time `json:"timestamp"`
-	AggregateId string    `json:"aggregate_id"`
+	id          string
+	eventType   EventType
+	timestamp   time.Time
+	aggregateId string
 }
 
 // NewBaseEvent creates a new BaseEvent. Panics if eventType format is invalid.
@@ -58,21 +54,21 @@ func NewBaseEvent(eventType EventType, aggregateID string) BaseEvent {
 		panic(err)
 	}
 	return BaseEvent{
-		ID:          uuid.New().String(),
-		Type:        eventType,
-		Timestamp:   time.Now().UTC(),
-		AggregateId: aggregateID,
+		id:          uuid.New().String(), // TODO
+		eventType:   eventType,
+		timestamp:   time.Now().UTC(), // TODO
+		aggregateId: aggregateID,
 	}
 }
 
-func (e BaseEvent) EventID() string       { return e.ID }
-func (e BaseEvent) EventType() EventType  { return e.Type }
-func (e BaseEvent) OccurredAt() time.Time { return e.Timestamp }
-func (e BaseEvent) AggregateID() string   { return e.AggregateId }
+func (e BaseEvent) EventID() string       { return e.id }
+func (e BaseEvent) EventType() EventType  { return e.eventType }
+func (e BaseEvent) OccurredAt() time.Time { return e.timestamp }
+func (e BaseEvent) AggregateID() string   { return e.aggregateId }
 
 // Publisher publishes domain events for other modules to consume.
 type Publisher interface {
-	Publish(ctx context.Context, event Event) error
+	Publish(ctx context.Context, events ...Event) error
 }
 
 // Handler handles a specific type of domain event.

@@ -21,8 +21,7 @@ Spanner's `ReadWriteTransaction` automatically retries the callback function whe
 Command Execute
     └─> Transaction Start
          ├─> Business Logic
-         ├─> Event Publish
-         ├─> Event Handler Execute  ← May be retried!
+         ├─> Event Publish (handlers execute immediately)  ← May be retried!
          └─> Commit (or Retry from Start)
 ```
 
@@ -81,29 +80,28 @@ func (r *SpannerRepository) Save(ctx context.Context, order *Order) error {
 }
 ```
 
-### 3. Prevent Duplicate Event Firing on Retry
+### 3. Context-based Depth Tracking
 
-When using `TransactionalPublisher`, events are buffered and processed before commit. On retry, events must not accumulate.
+The `EventBus` tracks event processing depth via context, not instance state. This ensures:
 
-**Solution:** Create `TransactionalPublisher` inside the transaction closure, ensuring a fresh instance on each retry.
+- Spanner retries automatically reset depth (new context)
+- Concurrent transactions are isolated
+- A single `EventBus` instance is safely shared
 
 ```go
-// GOOD: Fresh publisher per retry attempt
-txScope.Execute(ctx, func(ctx context.Context) error {
-    publisher := eventbus.NewTransactionalPublisher(registry, 10) // Fresh instance
+// EventBus is injected into command handlers
+type DeleteUserHandler struct {
+    repo      domain.UserRepository
+    txScope   transaction.TransactionScope
+    publisher events.Publisher  // EventBus
+}
 
-    // ... business logic ...
-
-    publisher.Publish(ctx, event)
-    return publisher.Flush(ctx) // Events processed here
-})
-
-// BAD: Reusing publisher across retries
-publisher := eventbus.NewTransactionalPublisher(registry, 10) // Created outside
-txScope.Execute(ctx, func(ctx context.Context) error {
-    publisher.Publish(ctx, event) // Accumulates on each retry!
-    return publisher.Flush(ctx)
-})
+func (h *DeleteUserHandler) Handle(ctx context.Context, cmd DeleteUserCommand) error {
+    return h.txScope.Execute(ctx, func(ctx context.Context) error {
+        // ... business logic ...
+        return h.publisher.Publish(ctx, events...) // Depth tracked via ctx
+    })
+}
 ```
 
 ### 4. Handler Errors Cause Transaction Rollback
@@ -164,7 +162,7 @@ Transaction Commit → Event Published → Handler Reads (sees committed data)
 |------------|:-------------:|:-----------------:|
 | No external side effects | **Required** | Allowed |
 | Use DML (not Mutations) | **Required** | N/A |
-| Fresh event bus per retry | **Required** | N/A |
+| Fresh publisher per retry | **Required** | N/A |
 | Handler error = rollback | Yes | No |
 | Idempotency | Nice to have | **Required** |
 | Data consistency | Strong | Eventual |

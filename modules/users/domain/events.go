@@ -16,9 +16,6 @@ const (
 	UserUpdatedEventType events.EventType = "users.UserUpdated"
 )
 
-// Re-export from contracts for convenience within this module
-const UserDeletedEventType = contracts.UserDeletedEventType
-
 // UserCreatedEvent is published when a new user is created.
 type UserCreatedEvent struct {
 	events.BaseEvent
@@ -57,13 +54,9 @@ func NewUserUpdatedEvent(user *User) UserUpdatedEvent {
 	}
 }
 
-// UserDeletedEvent is a type alias for the cross-module contract.
-// This ensures subscribers in other modules can type-assert correctly.
-type UserDeletedEvent = contracts.UserDeletedEvent
-
-func NewUserDeletedEvent(userID UserID) UserDeletedEvent {
-	return UserDeletedEvent{
-		BaseEvent: events.NewBaseEvent(UserDeletedEventType, userID.String()),
+func newUserDeletedEvent(userID UserID) contracts.UserDeletedEvent {
+	return contracts.UserDeletedEvent{
+		BaseEvent: events.NewBaseEvent(contracts.UserDeletedEventType, userID.String()),
 		UserID:    userID.String(),
 	}
 }

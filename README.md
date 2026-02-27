@@ -63,22 +63,25 @@ The alternative — exposing `CreateUser()`, `GetUser()`, `UpdateUser()` — wou
 Events and database changes must be atomic. If the transaction fails, no events should be published. This implementation uses a **transactional event bus**:
 
 ```go
-err = txScope.Execute(ctx, func(ctx context.Context) error {
-    publisher := eventbus.NewTransactionalPublisher(registry, 10)
+// EventBus is injected into command handlers
+type CreateUserHandler struct {
+    repo      domain.UserRepository
+    txScope   transaction.TransactionScope
+    publisher events.Publisher  // EventBus implements this
+}
 
-    user := domain.NewUser(email, name)  // Collects UserCreatedEvent
-    repo.Save(ctx, user)
+func (h *CreateUserHandler) Handle(ctx context.Context, cmd CreateUserCommand) error {
+    return h.txScope.Execute(ctx, func(ctx context.Context) error {
+        user := domain.NewUser(email, name)  // Collects UserCreatedEvent
+        h.repo.Save(ctx, user)
 
-    for _, event := range user.DomainEvents() {
-        publisher.Publish(ctx, event)    // Buffer, don't dispatch yet
-    }
-
-    return publisher.Flush(ctx)          // Handlers run within transaction
-})
+        return h.publisher.Publish(ctx, user.PopDomainEvents()...)  // Handlers run immediately
+    })
+}
 // Transaction commits only if everything succeeds
 ```
 
-Events are buffered during the transaction. `Flush()` invokes handlers synchronously before commit. If any handler fails, the entire transaction rolls back. This eliminates the "event published but data not saved" inconsistency.
+Handlers execute synchronously within the transaction. If any handler fails, the entire transaction rolls back. This eliminates the "event published but data not saved" inconsistency.
 
 ### 3. Aggregates Collect Their Own Events
 

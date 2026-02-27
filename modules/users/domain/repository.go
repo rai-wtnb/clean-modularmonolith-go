@@ -19,9 +19,6 @@ type UserRepository interface {
 	// Returns ErrUserNotFound if user doesn't exist.
 	FindByEmail(ctx context.Context, email Email) (*User, error)
 
-	// Delete removes a user from persistence.
-	Delete(ctx context.Context, id UserID) error
-
 	// Exists checks if a user with the given email exists.
 	Exists(ctx context.Context, email Email) (bool, error)
 

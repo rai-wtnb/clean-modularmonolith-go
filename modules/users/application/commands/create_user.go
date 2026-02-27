@@ -6,8 +6,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rai/clean-modularmonolith-go/internal/platform/eventbus"
 	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
@@ -25,20 +25,20 @@ type CreateUserResult struct {
 
 // CreateUserHandler handles the CreateUserCommand.
 type CreateUserHandler struct {
-	repo            domain.UserRepository
-	txScope         transaction.TransactionScope
-	handlerRegistry eventbus.HandlerRegistry
+	repo      domain.UserRepository
+	txScope   transaction.TransactionScope
+	publisher events.Publisher
 }
 
 func NewCreateUserHandler(
 	repo domain.UserRepository,
 	txScope transaction.TransactionScope,
-	handlerRegistry eventbus.HandlerRegistry,
+	publisher events.Publisher,
 ) *CreateUserHandler {
 	return &CreateUserHandler{
-		repo:            repo,
-		txScope:         txScope,
-		handlerRegistry: handlerRegistry,
+		repo:      repo,
+		txScope:   txScope,
+		publisher: publisher,
 	}
 }
 
@@ -60,8 +60,6 @@ func (h *CreateUserHandler) Handle(ctx context.Context, cmd CreateUserCommand) (
 	var userID string
 
 	fn := func(ctx context.Context) error {
-		// Create publisher inside closure for Spanner retry safety
-		publisher := eventbus.NewTransactionalPublisher(h.handlerRegistry, 10)
 
 		exists, err := h.repo.Exists(ctx, email)
 		if err != nil {
@@ -80,17 +78,8 @@ func (h *CreateUserHandler) Handle(ctx context.Context, cmd CreateUserCommand) (
 			return fmt.Errorf("saving user: %w", err)
 		}
 
-		// Collect events from aggregate and publish
-		for _, event := range user.DomainEvents() {
-			if err := publisher.Publish(ctx, event); err != nil {
-				return fmt.Errorf("publishing event: %w", err)
-			}
-		}
-		user.ClearDomainEvents()
-
-		// Flush events (handlers run within same transaction)
-		if err := publisher.Flush(ctx); err != nil {
-			return fmt.Errorf("flushing events: %w", err)
+		if err := h.publisher.Publish(ctx, user.PopDomainEvents()...); err != nil {
+			return fmt.Errorf("publishing events: %w", err)
 		}
 
 		return nil

@@ -5,9 +5,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rai/clean-modularmonolith-go/internal/platform/eventbus"
 	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
 )
 
 // CreateOrderCommand creates a new order for a user.
@@ -16,20 +16,20 @@ type CreateOrderCommand struct {
 }
 
 type CreateOrderHandler struct {
-	repo            domain.OrderRepository
-	txScope         transaction.TransactionScope
-	handlerRegistry eventbus.HandlerRegistry
+	repo      domain.OrderRepository
+	txScope   transaction.TransactionScope
+	publisher events.Publisher
 }
 
 func NewCreateOrderHandler(
 	repo domain.OrderRepository,
 	txScope transaction.TransactionScope,
-	handlerRegistry eventbus.HandlerRegistry,
+	publisher events.Publisher,
 ) *CreateOrderHandler {
 	return &CreateOrderHandler{
-		repo:            repo,
-		txScope:         txScope,
-		handlerRegistry: handlerRegistry,
+		repo:      repo,
+		txScope:   txScope,
+		publisher: publisher,
 	}
 }
 
@@ -45,9 +45,6 @@ func (h *CreateOrderHandler) Handle(ctx context.Context, cmd CreateOrderCommand)
 	var orderID string
 
 	err = h.txScope.Execute(ctx, func(ctx context.Context) error {
-		// Create publisher inside closure for Spanner retry safety
-		publisher := eventbus.NewTransactionalPublisher(h.handlerRegistry, 10)
-
 		// Create the order aggregate (adds OrderCreatedEvent internally)
 		order := domain.NewOrder(userRef)
 		orderID = order.ID().String()
@@ -57,17 +54,9 @@ func (h *CreateOrderHandler) Handle(ctx context.Context, cmd CreateOrderCommand)
 			return fmt.Errorf("saving order: %w", err)
 		}
 
-		// Collect events from aggregate and publish
-		for _, event := range order.DomainEvents() {
-			if err := publisher.Publish(ctx, event); err != nil {
-				return fmt.Errorf("publishing event: %w", err)
-			}
-		}
-		order.ClearDomainEvents()
-
-		// Flush events (handlers run within same transaction)
-		if err := publisher.Flush(ctx); err != nil {
-			return fmt.Errorf("flushing events: %w", err)
+		// Publish events (handlers execute immediately within same transaction)
+		if err := h.publisher.Publish(ctx, order.PopDomainEvents()...); err != nil {
+			return fmt.Errorf("publishing events: %w", err)
 		}
 
 		return nil
