@@ -5,9 +5,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction"
 )
 
 // CreateOrderCommand creates a new order for a user.
@@ -17,13 +17,13 @@ type CreateOrderCommand struct {
 
 type CreateOrderHandler struct {
 	repo      domain.OrderRepository
-	txScope   transaction.TransactionScope
+	txScope   transaction.Scope
 	publisher events.Publisher
 }
 
 func NewCreateOrderHandler(
 	repo domain.OrderRepository,
-	txScope transaction.TransactionScope,
+	txScope transaction.Scope,
 	publisher events.Publisher,
 ) *CreateOrderHandler {
 	return &CreateOrderHandler{
@@ -42,29 +42,20 @@ func (h *CreateOrderHandler) Handle(ctx context.Context, cmd CreateOrderCommand)
 		return "", fmt.Errorf("invalid user ID: %w", err)
 	}
 
-	var orderID string
-
-	err = h.txScope.Execute(ctx, func(ctx context.Context) error {
+	return transaction.ExecuteWithResult(ctx, h.txScope, func(ctx context.Context) (string, error) {
 		// Create the order aggregate (adds OrderCreatedEvent internally)
 		order := domain.NewOrder(userRef)
-		orderID = order.ID().String()
 
 		// Persist the order
 		if err := h.repo.Save(ctx, order); err != nil {
-			return fmt.Errorf("saving order: %w", err)
+			return "", fmt.Errorf("saving order: %w", err)
 		}
 
 		// Publish events (handlers execute immediately within same transaction)
 		if err := h.publisher.Publish(ctx, order.PopDomainEvents()...); err != nil {
-			return fmt.Errorf("publishing events: %w", err)
+			return "", fmt.Errorf("publishing events: %w", err)
 		}
 
-		return nil
+		return order.ID().String(), nil
 	})
-
-	if err != nil {
-		return "", err
-	}
-
-	return orderID, nil
 }

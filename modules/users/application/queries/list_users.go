@@ -3,6 +3,7 @@ package queries
 import (
 	"context"
 
+	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
@@ -22,14 +23,17 @@ type ListUsersQuery struct {
 
 // ListUsersHandler handles ListUsersQuery.
 type ListUsersHandler struct {
-	repo domain.UserRepository
+	repo    domain.UserRepository
+	txScope transaction.Scope
 }
 
-func NewListUsersHandler(repo domain.UserRepository) *ListUsersHandler {
-	return &ListUsersHandler{repo: repo}
+func NewListUsersHandler(repo domain.UserRepository, txScope transaction.Scope) *ListUsersHandler {
+	return &ListUsersHandler{repo: repo, txScope: txScope}
 }
 
 // Handle executes the list users query.
+// Uses a read-only transaction to ensure COUNT and SELECT see
+// the same point-in-time snapshot.
 func (h *ListUsersHandler) Handle(ctx context.Context, query ListUsersQuery) (*UserListDTO, error) {
 	// Apply defaults
 	offset := query.Offset
@@ -41,20 +45,22 @@ func (h *ListUsersHandler) Handle(ctx context.Context, query ListUsersQuery) (*U
 		limit = 100
 	}
 
-	users, total, err := h.repo.FindAll(ctx, offset, limit)
-	if err != nil {
-		return nil, err
-	}
+	return transaction.ExecuteWithResult(ctx, h.txScope, func(ctx context.Context) (*UserListDTO, error) {
+		users, total, err := h.repo.FindAll(ctx, offset, limit)
+		if err != nil {
+			return nil, err
+		}
 
-	dtos := make([]*UserDTO, len(users))
-	for i, user := range users {
-		dtos[i] = toUserDTO(user)
-	}
+		dtos := make([]*UserDTO, len(users))
+		for i, user := range users {
+			dtos[i] = toUserDTO(user)
+		}
 
-	return &UserListDTO{
-		Users:      dtos,
-		TotalCount: total,
-		Offset:     offset,
-		Limit:      limit,
-	}, nil
+		return &UserListDTO{
+			Users:      dtos,
+			TotalCount: total,
+			Offset:     offset,
+			Limit:      limit,
+		}, nil
+	})
 }

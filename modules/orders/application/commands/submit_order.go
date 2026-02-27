@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction"
 )
 
 // SubmitOrderCommand submits an order for processing.
@@ -16,13 +16,13 @@ type SubmitOrderCommand struct {
 
 type SubmitOrderHandler struct {
 	repo      domain.OrderRepository
-	txScope   transaction.TransactionScope
+	txScope   transaction.Scope
 	publisher events.Publisher
 }
 
 func NewSubmitOrderHandler(
 	repo domain.OrderRepository,
-	txScope transaction.TransactionScope,
+	txScope transaction.Scope,
 	publisher events.Publisher,
 ) *SubmitOrderHandler {
 	return &SubmitOrderHandler{

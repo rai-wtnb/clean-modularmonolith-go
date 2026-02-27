@@ -44,7 +44,7 @@ func (r *SpannerRepository) Save(ctx context.Context, user *domain.User) error {
 	}
 
 	// Use existing transaction if available
-	if txn, ok := platformspanner.TxFromContext(ctx); ok {
+	if txn, ok := platformspanner.ReadWriteTxFromContext(ctx); ok {
 		return txn.BufferWrite(mutations)
 	}
 
@@ -57,7 +57,12 @@ func (r *SpannerRepository) Save(ctx context.Context, user *domain.User) error {
 }
 
 func (r *SpannerRepository) FindByID(ctx context.Context, id domain.UserID) (*domain.User, error) {
-	row, err := r.client.Single().ReadRow(ctx, "Users",
+	rtx, ok := platformspanner.ReadTransactionFromContext(ctx)
+	if !ok {
+		rtx = r.client.Single()
+	}
+
+	row, err := rtx.ReadRow(ctx, "Users",
 		spanner.Key{id.String()},
 		[]string{"UserID", "Email", "FirstName", "LastName", "Status", "CreatedAt", "UpdatedAt"},
 	)
@@ -72,6 +77,11 @@ func (r *SpannerRepository) FindByID(ctx context.Context, id domain.UserID) (*do
 }
 
 func (r *SpannerRepository) FindByEmail(ctx context.Context, email domain.Email) (*domain.User, error) {
+	rtx, ok := platformspanner.ReadTransactionFromContext(ctx)
+	if !ok {
+		rtx = r.client.Single()
+	}
+
 	stmt := spanner.Statement{
 		SQL: `SELECT UserID, Email, FirstName, LastName, Status, CreatedAt, UpdatedAt
 		      FROM Users@{FORCE_INDEX=UsersByEmail}
@@ -80,7 +90,7 @@ func (r *SpannerRepository) FindByEmail(ctx context.Context, email domain.Email)
 		Params: map[string]interface{}{"email": email.String()},
 	}
 
-	iter := r.client.Single().Query(ctx, stmt)
+	iter := rtx.Query(ctx, stmt)
 	defer iter.Stop()
 
 	row, err := iter.Next()
@@ -95,12 +105,17 @@ func (r *SpannerRepository) FindByEmail(ctx context.Context, email domain.Email)
 }
 
 func (r *SpannerRepository) Exists(ctx context.Context, email domain.Email) (bool, error) {
+	rtx, ok := platformspanner.ReadTransactionFromContext(ctx)
+	if !ok {
+		rtx = r.client.Single()
+	}
+
 	stmt := spanner.Statement{
 		SQL:    `SELECT 1 FROM Users@{FORCE_INDEX=UsersByEmail} WHERE Email = @email LIMIT 1`,
 		Params: map[string]interface{}{"email": email.String()},
 	}
 
-	iter := r.client.Single().Query(ctx, stmt)
+	iter := rtx.Query(ctx, stmt)
 	defer iter.Stop()
 
 	_, err := iter.Next()
@@ -114,13 +129,18 @@ func (r *SpannerRepository) Exists(ctx context.Context, email domain.Email) (boo
 }
 
 func (r *SpannerRepository) FindAll(ctx context.Context, offset, limit int) ([]*domain.User, int, error) {
-	txn := r.client.Single()
+	rtx, ok := platformspanner.ReadTransactionFromContext(ctx)
+	if !ok {
+		roTx := r.client.ReadOnlyTransaction()
+		defer roTx.Close()
+		rtx = roTx
+	}
 
 	// Get total count
 	countStmt := spanner.Statement{
 		SQL: `SELECT COUNT(*) FROM Users WHERE Status != 'deleted'`,
 	}
-	countIter := txn.Query(ctx, countStmt)
+	countIter := rtx.Query(ctx, countStmt)
 	defer countIter.Stop()
 
 	var total int64
@@ -147,7 +167,7 @@ func (r *SpannerRepository) FindAll(ctx context.Context, offset, limit int) ([]*
 		},
 	}
 
-	iter := txn.Query(ctx, stmt)
+	iter := rtx.Query(ctx, stmt)
 	defer iter.Stop()
 
 	var users []*domain.User

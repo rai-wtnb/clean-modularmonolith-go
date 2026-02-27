@@ -15,15 +15,14 @@ type Config struct {
 	DatabaseID string
 }
 
-// DSN returns the Spanner database connection string.
-func (c Config) DSN() string {
-	return fmt.Sprintf("projects/%s/instances/%s/databases/%s",
-		c.ProjectID, c.InstanceID, c.DatabaseID)
+// dsn returns the Spanner database connection string.
+func (c Config) dsn() string {
+	return fmt.Sprintf("projects/%s/instances/%s/databases/%s", c.ProjectID, c.InstanceID, c.DatabaseID)
 }
 
 // The caller is responsible for closing the client when done.
 func NewClient(ctx context.Context, cfg Config) (*spanner.Client, error) {
-	client, err := spanner.NewClient(ctx, cfg.DSN())
+	client, err := spanner.NewClient(ctx, cfg.dsn())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create spanner client: %w", err)
 	}

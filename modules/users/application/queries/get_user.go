@@ -48,7 +48,6 @@ func (h *GetUserHandler) Handle(ctx context.Context, query GetUserQuery) (*UserD
 	if err != nil {
 		return nil, err
 	}
-
 	return toUserDTO(user), nil
 }
 

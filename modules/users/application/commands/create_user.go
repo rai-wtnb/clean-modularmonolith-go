@@ -6,8 +6,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
@@ -18,23 +18,14 @@ type CreateUserCommand struct {
 	LastName  string
 }
 
-// CreateUserResult holds the result of creating a user.
-type CreateUserResult struct {
-	UserID string
-}
-
 // CreateUserHandler handles the CreateUserCommand.
 type CreateUserHandler struct {
 	repo      domain.UserRepository
-	txScope   transaction.TransactionScope
+	txScope   transaction.Scope
 	publisher events.Publisher
 }
 
-func NewCreateUserHandler(
-	repo domain.UserRepository,
-	txScope transaction.TransactionScope,
-	publisher events.Publisher,
-) *CreateUserHandler {
+func NewCreateUserHandler(repo domain.UserRepository, txScope transaction.Scope, publisher events.Publisher) *CreateUserHandler {
 	return &CreateUserHandler{
 		repo:      repo,
 		txScope:   txScope,
@@ -57,38 +48,27 @@ func (h *CreateUserHandler) Handle(ctx context.Context, cmd CreateUserCommand) (
 		return "", fmt.Errorf("invalid name: %w", err)
 	}
 
-	var userID string
-
-	fn := func(ctx context.Context) error {
-
+	return transaction.ExecuteWithResult(ctx, h.txScope, func(ctx context.Context) (string, error) {
 		exists, err := h.repo.Exists(ctx, email)
 		if err != nil {
-			return fmt.Errorf("checking email existence: %w", err)
+			return "", fmt.Errorf("checking email existence: %w", err)
 		}
 		if exists {
-			return domain.ErrEmailExists
+			return "", domain.ErrEmailExists
 		}
 
 		// Create the user aggregate (adds UserCreatedEvent internally)
 		user := domain.NewUser(email, name)
-		userID = user.ID().String()
 
 		// Persist the user
 		if err := h.repo.Save(ctx, user); err != nil {
-			return fmt.Errorf("saving user: %w", err)
+			return "", fmt.Errorf("saving user: %w", err)
 		}
 
 		if err := h.publisher.Publish(ctx, user.PopDomainEvents()...); err != nil {
-			return fmt.Errorf("publishing events: %w", err)
+			return "", fmt.Errorf("publishing events: %w", err)
 		}
 
-		return nil
-	}
-	err = h.txScope.Execute(ctx, fn)
-
-	if err != nil {
-		return "", err
-	}
-
-	return userID, nil
+		return user.ID().String(), nil
+	})
 }

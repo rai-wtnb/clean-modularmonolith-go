@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
@@ -19,15 +19,11 @@ type UpdateUserCommand struct {
 // UpdateUserHandler handles the UpdateUserCommand.
 type UpdateUserHandler struct {
 	repo      domain.UserRepository
-	txScope   transaction.TransactionScope
+	txScope   transaction.Scope
 	publisher events.Publisher
 }
 
-func NewUpdateUserHandler(
-	repo domain.UserRepository,
-	txScope transaction.TransactionScope,
-	publisher events.Publisher,
-) *UpdateUserHandler {
+func NewUpdateUserHandler(repo domain.UserRepository, txScope transaction.Scope, publisher events.Publisher) *UpdateUserHandler {
 	return &UpdateUserHandler{
 		repo:      repo,
 		txScope:   txScope,

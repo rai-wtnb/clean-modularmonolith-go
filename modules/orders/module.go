@@ -6,13 +6,13 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/orders/application/commands"
 	"github.com/rai/clean-modularmonolith-go/modules/orders/application/eventhandlers"
 	"github.com/rai/clean-modularmonolith-go/modules/orders/application/queries"
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
 	httphandler "github.com/rai/clean-modularmonolith-go/modules/orders/infrastructure/http"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events/contracts"
 )
 
@@ -27,7 +27,7 @@ type Module interface {
 // Config holds the module configuration.
 type Config struct {
 	Repository       domain.OrderRepository
-	TransactionScope transaction.TransactionScope
+	TransactionScope transaction.Scope
 	Publisher        events.Publisher
 	Subscriber       events.Subscriber
 	Logger           *slog.Logger

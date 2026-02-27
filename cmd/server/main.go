@@ -47,10 +47,9 @@ func main() {
 	}
 	defer spannerClient.Close()
 
-	logger.Info("connected to spanner", slog.String("dsn", spannerCfg.DSN()))
-
-	// Initialize transaction scope for transactional operations
-	txScope := spanner.NewTransactionScope(spannerClient)
+	// Initialize transaction scopes
+	txScope := spanner.NewReadWriteTransactionScope(spannerClient)
+	roTxScope := spanner.NewReadOnlyTransactionScope(spannerClient)
 
 	// Initialize event bus (for inter-module communication)
 	// Implements both events.Publisher and events.Subscriber
@@ -63,9 +62,10 @@ func main() {
 	// Initialize modules
 	// Each module subscribes to events it cares about internally
 	usersCfg := users.Config{
-		Repository:       usersRepo,
-		TransactionScope: txScope,
-		Publisher:        eventBus,
+		Repository:               usersRepo,
+		ReadWriteTransactionScope: txScope,
+		ReadOnlyTransactionScope: roTxScope,
+		Publisher:                eventBus,
 	}
 	usersModule := users.New(usersCfg)
 

@@ -25,7 +25,7 @@ func NewSpannerRepository(client *spanner.Client) *SpannerRepository {
 // Save persists an order.
 // It uses an existing transaction if available, otherwise creates a new one.
 func (r *SpannerRepository) Save(ctx context.Context, order *domain.Order) error {
-	if txn, ok := platformspanner.TxFromContext(ctx); ok {
+	if txn, ok := platformspanner.ReadWriteTxFromContext(ctx); ok {
 		return r.saveWithTx(txn, order)
 	}
 
@@ -87,9 +87,16 @@ func (r *SpannerRepository) saveWithTx(tx *spanner.ReadWriteTransaction, order *
 }
 
 func (r *SpannerRepository) FindByID(ctx context.Context, id domain.OrderID) (*domain.Order, error) {
-	txn := r.client.Single()
+	reader, ok := platformspanner.ReadTransactionFromContext(ctx)
+	if !ok {
+		// Reads from Orders + OrderItems require ReadOnlyTransaction
+		// for point-in-time consistency. Single() is only for one read.
+		roTx := r.client.ReadOnlyTransaction()
+		defer roTx.Close()
+		reader = roTx
+	}
 
-	row, err := txn.ReadRow(ctx, "Orders",
+	row, err := reader.ReadRow(ctx, "Orders",
 		spanner.Key{id.String()},
 		[]string{"OrderID", "UserID", "Status", "TotalAmount", "TotalCurrency", "CreatedAt", "UpdatedAt"},
 	)
@@ -108,7 +115,7 @@ func (r *SpannerRepository) FindByID(ctx context.Context, id domain.OrderID) (*d
 		return nil, fmt.Errorf("failed to scan order: %w", err)
 	}
 
-	items, err := r.readOrderItems(ctx, txn, orderID)
+	items, err := r.readOrderItems(ctx, reader, orderID)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +141,14 @@ func (r *SpannerRepository) FindByID(ctx context.Context, id domain.OrderID) (*d
 }
 
 func (r *SpannerRepository) FindByUserRef(ctx context.Context, userRef domain.UserRef, offset, limit int) ([]*domain.Order, int, error) {
-	txn := r.client.Single()
+	reader, ok := platformspanner.ReadTransactionFromContext(ctx)
+	if !ok {
+		// Multiple queries (COUNT + SELECT + items) require ReadOnlyTransaction
+		// for point-in-time consistency. Single() is only for one read.
+		roTx := r.client.ReadOnlyTransaction()
+		defer roTx.Close()
+		reader = roTx
+	}
 
 	// Get total count
 	countStmt := spanner.Statement{
@@ -142,7 +156,7 @@ func (r *SpannerRepository) FindByUserRef(ctx context.Context, userRef domain.Us
 		Params: map[string]interface{}{"userID": userRef.String()},
 	}
 
-	countIter := txn.Query(ctx, countStmt)
+	countIter := reader.Query(ctx, countStmt)
 	defer countIter.Stop()
 
 	var total int64
@@ -170,7 +184,7 @@ func (r *SpannerRepository) FindByUserRef(ctx context.Context, userRef domain.Us
 		},
 	}
 
-	iter := txn.Query(ctx, stmt)
+	iter := reader.Query(ctx, stmt)
 	defer iter.Stop()
 
 	var orders []*domain.Order
@@ -191,7 +205,7 @@ func (r *SpannerRepository) FindByUserRef(ctx context.Context, userRef domain.Us
 			return nil, 0, fmt.Errorf("failed to scan order: %w", err)
 		}
 
-		items, err := r.readOrderItems(ctx, txn, orderID)
+		items, err := r.readOrderItems(ctx, reader, orderID)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -221,7 +235,7 @@ func (r *SpannerRepository) Delete(ctx context.Context, id domain.OrderID) error
 	}
 
 	// Use existing transaction if available
-	if txn, ok := platformspanner.TxFromContext(ctx); ok {
+	if txn, ok := platformspanner.ReadWriteTxFromContext(ctx); ok {
 		return txn.BufferWrite(mutations)
 	}
 
@@ -233,8 +247,8 @@ func (r *SpannerRepository) Delete(ctx context.Context, id domain.OrderID) error
 	return nil
 }
 
-func (r *SpannerRepository) readOrderItems(ctx context.Context, txn *spanner.ReadOnlyTransaction, orderID string) ([]domain.OrderItem, error) {
-	iter := txn.Read(ctx, "OrderItems",
+func (r *SpannerRepository) readOrderItems(ctx context.Context, reader platformspanner.ReadTransaction, orderID string) ([]domain.OrderItem, error) {
+	iter := reader.Read(ctx, "OrderItems",
 		spanner.KeyRange{
 			Start: spanner.Key{orderID},
 			End:   spanner.Key{orderID},

@@ -4,6 +4,7 @@ package http
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -173,10 +174,12 @@ func (h *Handler) handleCancelOrder(w http.ResponseWriter, r *http.Request) {
 	orderID := r.PathValue("id")
 
 	cmd := commands.CancelOrderCommand{OrderID: orderID}
-	if err := h.cancelOrder.Handle(r.Context(), cmd); err != nil {
+	order, err := h.cancelOrder.Handle(r.Context(), cmd)
+	if err != nil {
 		handleError(w, err)
 		return
 	}
+	fmt.Println(order.ID()) // TODO
 
 	w.WriteHeader(http.StatusNoContent)
 }

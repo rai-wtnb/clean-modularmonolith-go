@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rai/clean-modularmonolith-go/internal/platform/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
@@ -17,11 +17,11 @@ type DeleteUserCommand struct {
 // DeleteUserHandler handles the DeleteUserCommand.
 type DeleteUserHandler struct {
 	repo           domain.UserRepository
-	txScope        transaction.TransactionScope
+	txScope        transaction.Scope
 	eventPublisher events.Publisher
 }
 
-func NewDeleteUserHandler(repo domain.UserRepository, txScope transaction.TransactionScope, eventPublisher events.Publisher) *DeleteUserHandler {
+func NewDeleteUserHandler(repo domain.UserRepository, txScope transaction.Scope, eventPublisher events.Publisher) *DeleteUserHandler {
 	return &DeleteUserHandler{
 		repo:           repo,
 		txScope:        txScope,
