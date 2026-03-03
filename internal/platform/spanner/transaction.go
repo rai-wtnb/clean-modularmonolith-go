@@ -2,16 +2,9 @@ package spanner
 
 import (
 	"context"
-	"errors"
 
 	"cloud.google.com/go/spanner"
 )
-
-// ErrNestedTransaction is returned when attempting to start a transaction
-// inside an already-active transaction scope.
-// Cloud Spanner does not support nested transactions — nesting would silently
-// create an independent transaction, breaking atomicity guarantees.
-var ErrNestedTransaction = errors.New("nested transaction detected: Cloud Spanner does not support nested transactions")
 
 // ReadWriteTransactionScope manages the lifecycle of a Spanner read-write transaction.
 type ReadWriteTransactionScope struct {
@@ -25,6 +18,8 @@ func NewReadWriteTransactionScope(client *spanner.Client) *ReadWriteTransactionS
 }
 
 // Execute runs fn within a Spanner ReadWriteTransaction.
+// If a ReadWriteTransaction already exists in ctx, fn joins that transaction
+// instead of creating a new one (REQUIRED propagation semantics).
 // The transaction is committed if fn returns nil, rolled back otherwise.
 // The ctx passed to fn contains the transaction for repositories to access via ReadWriteTxFromContext.
 //
@@ -33,6 +28,9 @@ func NewReadWriteTransactionScope(client *spanner.Client) *ReadWriteTransactionS
 //   - fn must NOT perform external side effects (email, API calls, etc.)
 //   - Any state (like TransactionalPublisher) should be created inside fn
 func (s *ReadWriteTransactionScope) Execute(ctx context.Context, fn func(ctx context.Context) error) error {
+	if _, ok := ReadWriteTxFromContext(ctx); ok {
+		return fn(ctx)
+	}
 	_, err := s.client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *spanner.ReadWriteTransaction) error {
 		txCtx, err := withReadWriteTx(ctx, tx)
 		if err != nil {
@@ -55,9 +53,14 @@ func NewReadOnlyTransactionScope(client *spanner.Client) *ReadOnlyTransactionSco
 }
 
 // Execute runs fn within a Spanner ReadOnlyTransaction.
+// If a ReadTransaction (read-write or read-only) already exists in ctx, fn joins
+// that transaction instead of creating a new one (REQUIRED propagation semantics).
 // The ctx passed to fn contains the transaction for repositories to access via ReadTransactionFromContext.
 // The transaction is closed automatically when Execute returns.
 func (s *ReadOnlyTransactionScope) Execute(ctx context.Context, fn func(ctx context.Context) error) error {
+	if _, ok := ReadTransactionFromContext(ctx); ok {
+		return fn(ctx)
+	}
 	tx := s.client.ReadOnlyTransaction()
 	defer tx.Close()
 

@@ -2,9 +2,16 @@ package spanner
 
 import (
 	"context"
+	"errors"
 
 	"cloud.google.com/go/spanner"
 )
+
+// ErrNestedTransaction is returned when attempting to start a transaction
+// inside an already-active transaction scope.
+// Cloud Spanner does not support nested transactions — nesting would silently
+// create an independent transaction, breaking atomicity guarantees.
+var ErrNestedTransaction = errors.New("nested transaction detected: Cloud Spanner does not support nested transactions")
 
 // readWriteTxKey is the context key for storing Spanner ReadWriteTransaction.
 type readWriteTxKey struct{}

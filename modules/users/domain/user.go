@@ -34,7 +34,7 @@ func NewUser(email Email, name Name) *User {
 		createdAt:     time.Now().UTC(),
 		updatedAt:     time.Now().UTC(),
 	}
-	u.AddDomainEvent(NewUserCreatedEvent(u))
+	u.AddDomainEvent(newUserCreatedEvent(u))
 	return u
 }
 
@@ -71,7 +71,7 @@ func (u *User) UpdateProfile(name Name) error {
 	}
 	u.name = name
 	u.updatedAt = time.Now().UTC()
-	u.AddDomainEvent(NewUserUpdatedEvent(u))
+	u.AddDomainEvent(newUserUpdatedEvent(u))
 	return nil
 }
 
@@ -83,7 +83,7 @@ func (u *User) ChangeEmail(email Email) error {
 	}
 	u.email = email
 	u.updatedAt = time.Now().UTC()
-	u.AddDomainEvent(NewUserUpdatedEvent(u))
+	u.AddDomainEvent(newUserUpdatedEvent(u))
 	return nil
 }
 

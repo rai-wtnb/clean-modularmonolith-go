@@ -8,6 +8,7 @@ import (
 
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction"
+	"github.com/rai/clean-modularmonolith-go/modules/users/application"
 	"github.com/rai/clean-modularmonolith-go/modules/users/application/commands"
 	"github.com/rai/clean-modularmonolith-go/modules/users/application/queries"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
@@ -41,10 +42,14 @@ type module struct {
 
 // New creates a new users module with all dependencies wired.
 func New(cfg Config) Module {
+	// Wrap the publisher with the users-specific adapter that translates
+	// internal domain events to cross-module contract events.
+	publisher := application.NewUsersPublisher(cfg.Publisher)
+
 	// Wire up command handlers
-	createUserHandler := commands.NewCreateUserHandler(cfg.Repository, cfg.ReadWriteTransactionScope, cfg.Publisher)
-	updateUserHandler := commands.NewUpdateUserHandler(cfg.Repository, cfg.ReadWriteTransactionScope, cfg.Publisher)
-	deleteUserHandler := commands.NewDeleteUserHandler(cfg.Repository, cfg.ReadWriteTransactionScope, cfg.Publisher)
+	createUserHandler := commands.NewCreateUserHandler(cfg.Repository, cfg.ReadWriteTransactionScope, publisher)
+	updateUserHandler := commands.NewUpdateUserHandler(cfg.Repository, cfg.ReadWriteTransactionScope, publisher)
+	deleteUserHandler := commands.NewDeleteUserHandler(cfg.Repository, cfg.ReadWriteTransactionScope, publisher)
 
 	// Wire up query handlers
 	getUserHandler := queries.NewGetUserHandler(cfg.Repository)
