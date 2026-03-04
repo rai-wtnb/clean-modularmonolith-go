@@ -86,6 +86,9 @@ func main() {
 	}
 	_ = notifications.New(notificationCfg)
 
+	// Log all event subscriptions after module initialization
+	eventBus.LogSubscriptions()
+
 	// Build HTTP router
 	router := buildRouter(usersModule, ordersModule)
 

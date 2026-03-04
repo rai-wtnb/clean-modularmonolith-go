@@ -26,6 +26,9 @@ func NewUserDeletedHandler(orderRepo domain.OrderRepository, logger *slog.Logger
 	}
 }
 
+func (h *UserDeletedHandler) HandlerName() string { return "UserDeletedHandler" }
+func (h *UserDeletedHandler) Subdomain() string    { return "orders" }
+
 func (h *UserDeletedHandler) Handle(ctx context.Context, event events.Event) error {
 	userDeletedEvent, ok := event.(contracts.UserDeletedEvent)
 	if !ok {

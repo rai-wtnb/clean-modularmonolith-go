@@ -12,6 +12,10 @@ import (
 	"sync"
 
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -32,6 +36,8 @@ type EventBus struct {
 var (
 	_ events.Subscriber = (*EventBus)(nil)
 	_ events.Publisher  = (*EventBus)(nil)
+
+	tracer = otel.Tracer("eventbus")
 )
 
 // NewEventBus creates a new event bus.
@@ -40,6 +46,19 @@ func NewEventBus(logger *slog.Logger) *EventBus {
 		handlers: make(map[events.EventType][]events.Handler),
 		logger:   logger,
 		maxDepth: 10,
+	}
+}
+
+// LogSubscriptions logs all registered event subscriptions.
+// Call this after all modules have been initialized to verify wiring.
+func (b *EventBus) LogSubscriptions() {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	for eventType, handlers := range b.handlers {
+		for _, h := range handlers {
+			b.logger.Info("event subscription", slog.String("event_type", eventType.String()), slog.String("handler", h.HandlerName()), slog.String("subdomain", h.Subdomain()))
+		}
 	}
 }
 
@@ -78,7 +97,18 @@ func (b *EventBus) processEvent(ctx context.Context, event events.Event) error {
 	g, ctx := errgroup.WithContext(ctx)
 	for handler := range slices.Values(handlers) {
 		g.Go(func() error {
-			return handler.Handle(ctx, event)
+			ctx, span := tracer.Start(ctx,
+				fmt.Sprintf("event.handle %s/%s", handler.Subdomain(), handler.HandlerName()),
+				trace.WithAttributes(attribute.String("event.type", event.EventType().String()), attribute.String("event.id", event.EventID()), attribute.String("event.handler", handler.HandlerName()), attribute.String("event.subdomain", handler.Subdomain())),
+			)
+			defer span.End()
+
+			if err := handler.Handle(ctx, event); err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, err.Error())
+				return err
+			}
+			return nil
 		})
 	}
 	if err := g.Wait(); err != nil {

@@ -74,6 +74,10 @@ type Publisher interface {
 // Handler handles a specific type of domain event.
 type Handler interface {
 	Handle(ctx context.Context, event Event) error
+	// HandlerName returns the name of this handler (e.g., "UserDeletedHandler").
+	HandlerName() string
+	// Subdomain returns the subdomain this handler belongs to (e.g., "orders").
+	Subdomain() string
 }
 
 // Subscriber subscribes to domain events.

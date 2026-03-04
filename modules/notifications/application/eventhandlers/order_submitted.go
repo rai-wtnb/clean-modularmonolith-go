@@ -27,6 +27,9 @@ func NewOrderSubmittedHandler(logger *slog.Logger) *OrderSubmittedHandler {
 
 // Handle processes the OrderSubmitted event.
 // TODO: Implement idempotency using event ID before production use.
+func (h *OrderSubmittedHandler) HandlerName() string { return "OrderSubmittedHandler" }
+func (h *OrderSubmittedHandler) Subdomain() string    { return "notifications" }
+
 func (h *OrderSubmittedHandler) Handle(ctx context.Context, event events.Event) error {
 	// In a real application, we would unmarshal the payload to get details
 	// For this example, we just trust the event type and ID
