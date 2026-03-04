@@ -2,15 +2,14 @@
 package domain
 
 import (
+	"context"
 	"time"
 
-	shareddomain "github.com/rai/clean-modularmonolith-go/modules/shared/domain"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
 )
 
 // Order is the aggregate root for the order bounded context.
 type Order struct {
-	shareddomain.AggregateRoot
-
 	id        OrderID
 	userRef   UserRef
 	items     []OrderItem
@@ -33,19 +32,18 @@ func (i OrderItem) Subtotal() Money {
 }
 
 // NewOrder creates a new order for a user.
-// Adds OrderCreatedEvent to be dispatched after persistence.
-func NewOrder(userRef UserRef) *Order {
+// Adds OrderCreatedEvent to the context for later dispatch.
+func NewOrder(ctx context.Context, userRef UserRef) *Order {
 	o := &Order{
-		AggregateRoot: shareddomain.NewAggregateRoot(),
-		id:            NewOrderID(),
-		userRef:       userRef,
-		items:         make([]OrderItem, 0),
-		status:        StatusDraft,
-		total:         MustNewMoney(0, "USD"),
-		createdAt:     time.Now().UTC(),
-		updatedAt:     time.Now().UTC(),
+		id:        NewOrderID(),
+		userRef:   userRef,
+		items:     make([]OrderItem, 0),
+		status:    StatusDraft,
+		total:     MustNewMoney(0, "USD"),
+		createdAt: time.Now().UTC(),
+		updatedAt: time.Now().UTC(),
 	}
-	o.AddDomainEvent(NewOrderCreatedEvent(o))
+	events.Add(ctx, NewOrderCreatedEvent(o))
 	return o
 }
 
@@ -130,8 +128,8 @@ func (o *Order) RemoveItem(productID string) error {
 }
 
 // Submit submits the order for processing.
-// Adds OrderSubmittedEvent to be dispatched after persistence.
-func (o *Order) Submit() error {
+// Adds OrderSubmittedEvent to the context for later dispatch.
+func (o *Order) Submit(ctx context.Context) error {
 	if o.status != StatusDraft {
 		return ErrOrderNotDraft
 	}
@@ -141,7 +139,7 @@ func (o *Order) Submit() error {
 
 	o.status = StatusPending
 	o.updatedAt = time.Now().UTC()
-	o.AddDomainEvent(NewOrderSubmittedEvent(o))
+	events.Add(ctx, NewOrderSubmittedEvent(o))
 	return nil
 }
 
@@ -157,8 +155,8 @@ func (o *Order) Confirm() error {
 }
 
 // Cancel cancels the order.
-// Adds OrderCancelledEvent to be dispatched after persistence.
-func (o *Order) Cancel() error {
+// Adds OrderCancelledEvent to the context for later dispatch.
+func (o *Order) Cancel(ctx context.Context) error {
 	if o.status == StatusCancelled {
 		return ErrOrderAlreadyCancelled
 	}
@@ -168,7 +166,7 @@ func (o *Order) Cancel() error {
 
 	o.status = StatusCancelled
 	o.updatedAt = time.Now().UTC()
-	o.AddDomainEvent(NewOrderCancelledEvent(o))
+	events.Add(ctx, NewOrderCancelledEvent(o))
 	return nil
 }
 

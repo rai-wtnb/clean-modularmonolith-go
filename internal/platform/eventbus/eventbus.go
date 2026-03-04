@@ -74,16 +74,23 @@ func (b *EventBus) Subscribe(eventType events.EventType, handler events.Handler)
 	return nil
 }
 
-// Publish dispatches events to registered handlers synchronously.
-// Handlers execute within the current transaction context.
+// Publish extracts domain events from the context and dispatches them
+// to registered handlers synchronously. Uses a drain loop: after processing
+// the current batch, it checks for new events added by handlers and
+// processes those too, repeating until no events remain.
 // Implements events.Publisher.
-func (b *EventBus) Publish(ctx context.Context, domainEvents ...events.Event) error {
-	for event := range slices.Values(domainEvents) {
-		if err := b.processEvent(ctx, event); err != nil {
-			return err
+func (b *EventBus) Publish(ctx context.Context) error {
+	for {
+		pending := events.Collect(ctx)
+		if len(pending) == 0 {
+			return nil
+		}
+		for event := range slices.Values(pending) {
+			if err := b.processEvent(ctx, event); err != nil {
+				return err
+			}
 		}
 	}
-	return nil
 }
 
 func (b *EventBus) processEvent(ctx context.Context, event events.Event) error {

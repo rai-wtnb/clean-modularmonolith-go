@@ -1,12 +1,16 @@
 package domain_test
 
 import (
+	"context"
 	"testing"
 
+	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
 func TestNewUser(t *testing.T) {
+	ctx := events.NewContext(context.Background())
+
 	email, err := domain.NewEmail("test@example.com")
 	if err != nil {
 		t.Fatalf("failed to create email: %v", err)
@@ -17,7 +21,7 @@ func TestNewUser(t *testing.T) {
 		t.Fatalf("failed to create name: %v", err)
 	}
 
-	user := domain.NewUser(email, name)
+	user := domain.NewUser(ctx, email, name)
 
 	if user.ID().IsZero() {
 		t.Error("expected user to have an ID")
@@ -31,17 +35,26 @@ func TestNewUser(t *testing.T) {
 	if user.Status() != domain.StatusActive {
 		t.Errorf("expected status 'active', got '%s'", user.Status())
 	}
+
+	collected := events.Collect(ctx)
+	if len(collected) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(collected))
+	}
+	if collected[0].EventType() != domain.UserCreatedEventType {
+		t.Errorf("expected UserCreatedEvent, got %s", collected[0].EventType())
+	}
 }
 
 func TestUser_UpdateProfile(t *testing.T) {
-	user := createTestUser(t)
+	ctx := events.NewContext(context.Background())
+	user := createTestUser(t, ctx)
 
 	newName, err := domain.NewName("Jane", "Smith")
 	if err != nil {
 		t.Fatalf("failed to create name: %v", err)
 	}
 
-	err = user.UpdateProfile(newName)
+	err = user.UpdateProfile(ctx, newName)
 	if err != nil {
 		t.Fatalf("failed to update profile: %v", err)
 	}
@@ -52,9 +65,10 @@ func TestUser_UpdateProfile(t *testing.T) {
 }
 
 func TestUser_Delete(t *testing.T) {
-	user := createTestUser(t)
+	ctx := events.NewContext(context.Background())
+	user := createTestUser(t, ctx)
 
-	err := user.Delete()
+	err := user.Delete(ctx)
 	if err != nil {
 		t.Fatalf("failed to delete user: %v", err)
 	}
@@ -65,11 +79,12 @@ func TestUser_Delete(t *testing.T) {
 }
 
 func TestUser_UpdateProfile_Deleted(t *testing.T) {
-	user := createTestUser(t)
-	user.Delete()
+	ctx := events.NewContext(context.Background())
+	user := createTestUser(t, ctx)
+	user.Delete(ctx)
 
 	newName, _ := domain.NewName("Jane", "Smith")
-	err := user.UpdateProfile(newName)
+	err := user.UpdateProfile(ctx, newName)
 
 	if err != domain.ErrUserDeleted {
 		t.Errorf("expected ErrUserDeleted, got %v", err)
@@ -124,7 +139,7 @@ func TestName_Validation(t *testing.T) {
 	}
 }
 
-func createTestUser(t *testing.T) *domain.User {
+func createTestUser(t *testing.T, ctx context.Context) *domain.User {
 	t.Helper()
 
 	email, err := domain.NewEmail("test@example.com")
@@ -137,5 +152,5 @@ func createTestUser(t *testing.T) *domain.User {
 		t.Fatalf("failed to create name: %v", err)
 	}
 
-	return domain.NewUser(email, name)
+	return domain.NewUser(ctx, email, name)
 }

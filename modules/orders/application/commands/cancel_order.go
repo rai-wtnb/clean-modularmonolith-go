@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
-	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction"
 )
 
@@ -15,22 +14,20 @@ type CancelOrderCommand struct {
 }
 
 type CancelOrderHandler struct {
-	repo           domain.OrderRepository
-	txScope        transaction.Scope
-	eventPublisher events.Publisher
+	repo    domain.OrderRepository
+	txScope transaction.Scope
 }
 
-func NewCancelOrderHandler(repo domain.OrderRepository, txScope transaction.Scope, eventPublisher events.Publisher) *CancelOrderHandler {
+func NewCancelOrderHandler(repo domain.OrderRepository, txScope transaction.Scope) *CancelOrderHandler {
 	return &CancelOrderHandler{
-		repo:           repo,
-		txScope:        txScope,
-		eventPublisher: eventPublisher,
+		repo:    repo,
+		txScope: txScope,
 	}
 }
 
 // Handle executes the cancel order use case.
-// The operation runs within a transaction, and domain events are dispatched
-// before commit, allowing event handlers to participate in the same transaction.
+// The operation runs within a transaction. Domain events are collected
+// in the context and automatically published by EventAwareScope.
 func (h *CancelOrderHandler) Handle(ctx context.Context, cmd CancelOrderCommand) (*domain.Order, error) {
 	orderID, err := domain.ParseOrderID(cmd.OrderID)
 	if err != nil {
@@ -43,16 +40,12 @@ func (h *CancelOrderHandler) Handle(ctx context.Context, cmd CancelOrderCommand)
 			return nil, fmt.Errorf("finding order: %w", err)
 		}
 
-		if err := order.Cancel(); err != nil {
+		if err := order.Cancel(ctx); err != nil {
 			return nil, err
 		}
 
 		if err := h.repo.Save(ctx, order); err != nil {
 			return nil, fmt.Errorf("saving order: %w", err)
-		}
-
-		if err := h.eventPublisher.Publish(ctx, order.PopDomainEvents()...); err != nil {
-			return nil, fmt.Errorf("publishing events: %w", err)
 		}
 
 		return order, nil

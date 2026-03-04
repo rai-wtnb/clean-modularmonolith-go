@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
@@ -18,22 +17,20 @@ type UpdateUserCommand struct {
 
 // UpdateUserHandler handles the UpdateUserCommand.
 type UpdateUserHandler struct {
-	repo      domain.UserRepository
-	txScope   transaction.Scope
-	publisher events.Publisher
+	repo    domain.UserRepository
+	txScope transaction.Scope
 }
 
-func NewUpdateUserHandler(repo domain.UserRepository, txScope transaction.Scope, publisher events.Publisher) *UpdateUserHandler {
+func NewUpdateUserHandler(repo domain.UserRepository, txScope transaction.Scope) *UpdateUserHandler {
 	return &UpdateUserHandler{
-		repo:      repo,
-		txScope:   txScope,
-		publisher: publisher,
+		repo:    repo,
+		txScope: txScope,
 	}
 }
 
 // Handle executes the update user use case.
-// The operation runs within a transaction, and domain events are dispatched
-// before commit, allowing event handlers to participate in the same transaction.
+// The operation runs within a transaction. Domain events are collected
+// in the context and automatically published by EventAwareScope.
 func (h *UpdateUserHandler) Handle(ctx context.Context, cmd UpdateUserCommand) error {
 	userID, err := domain.ParseUserID(cmd.UserID)
 	if err != nil {
@@ -51,16 +48,12 @@ func (h *UpdateUserHandler) Handle(ctx context.Context, cmd UpdateUserCommand) e
 			return fmt.Errorf("finding user: %w", err)
 		}
 
-		if err := user.UpdateProfile(name); err != nil {
+		if err := user.UpdateProfile(ctx, name); err != nil {
 			return fmt.Errorf("updating profile: %w", err)
 		}
 
 		if err := h.repo.Save(ctx, user); err != nil {
 			return fmt.Errorf("saving user: %w", err)
-		}
-
-		if err := h.publisher.Publish(ctx, user.PopDomainEvents()...); err != nil {
-			return fmt.Errorf("publishing events: %w", err)
 		}
 
 		return nil

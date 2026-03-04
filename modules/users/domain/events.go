@@ -2,18 +2,20 @@ package domain
 
 import (
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/events/contracts"
 )
 
 // Domain events for the users bounded context.
 // Events represent facts about what happened in the domain.
 //
-// These are internal domain events. Cross-module contract events are produced
-// by the application layer (UsersPublisher) which translates these types.
+// Internal events (UserCreated, UserUpdated) stay within the module.
+// Cross-module events (UserDeleted) use contract types directly,
+// matching the pattern used by the orders module.
 
 const (
 	UserCreatedEventType events.EventType = "users.UserCreated"
 	UserUpdatedEventType events.EventType = "users.UserUpdated"
-	UserDeletedEventType events.EventType = "users.UserDeleted"
+	UserDeletedEventType                  = contracts.UserDeletedEventType
 )
 
 // UserCreatedEvent is published when a new user is created.
@@ -54,14 +56,8 @@ func newUserUpdatedEvent(user *User) UserUpdatedEvent {
 	}
 }
 
-// UserDeletedEvent is published when a user is deleted.
-type UserDeletedEvent struct {
-	events.BaseEvent
-	UserID string `json:"user_id"`
-}
-
-func newUserDeletedEvent(userID UserID) UserDeletedEvent {
-	return UserDeletedEvent{
+func newUserDeletedEvent(userID UserID) contracts.UserDeletedEvent {
+	return contracts.UserDeletedEvent{
 		BaseEvent: events.NewBaseEvent(UserDeletedEventType, userID.String()),
 		UserID:    userID.String(),
 	}

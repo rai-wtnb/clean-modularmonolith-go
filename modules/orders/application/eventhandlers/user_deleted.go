@@ -55,7 +55,7 @@ func (h *UserDeletedHandler) Handle(ctx context.Context, event events.Event) err
 			continue
 		}
 
-		if err := order.Cancel(); err != nil {
+		if err := order.Cancel(ctx); err != nil {
 			h.logger.Warn("failed to cancel order",
 				slog.String("order_id", order.ID().String()),
 				slog.Any("error", err),

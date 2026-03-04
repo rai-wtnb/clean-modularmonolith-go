@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
@@ -20,22 +19,20 @@ type CreateUserCommand struct {
 
 // CreateUserHandler handles the CreateUserCommand.
 type CreateUserHandler struct {
-	repo      domain.UserRepository
-	txScope   transaction.Scope
-	publisher events.Publisher
+	repo    domain.UserRepository
+	txScope transaction.Scope
 }
 
-func NewCreateUserHandler(repo domain.UserRepository, txScope transaction.Scope, publisher events.Publisher) *CreateUserHandler {
+func NewCreateUserHandler(repo domain.UserRepository, txScope transaction.Scope) *CreateUserHandler {
 	return &CreateUserHandler{
-		repo:      repo,
-		txScope:   txScope,
-		publisher: publisher,
+		repo:    repo,
+		txScope: txScope,
 	}
 }
 
 // Handle executes the create user use case.
-// The operation runs within a transaction, and domain events are dispatched
-// before commit, allowing event handlers to participate in the same transaction.
+// The operation runs within a transaction. Domain events are collected
+// in the context and automatically published by EventAwareScope.
 func (h *CreateUserHandler) Handle(ctx context.Context, cmd CreateUserCommand) (string, error) {
 	// Validate and create value objects (before transaction)
 	email, err := domain.NewEmail(cmd.Email)
@@ -57,16 +54,12 @@ func (h *CreateUserHandler) Handle(ctx context.Context, cmd CreateUserCommand) (
 			return "", domain.ErrEmailExists
 		}
 
-		// Create the user aggregate (adds UserCreatedEvent internally)
-		user := domain.NewUser(email, name)
+		// Create the user aggregate (adds UserCreatedEvent to ctx)
+		user := domain.NewUser(ctx, email, name)
 
 		// Persist the user
 		if err := h.repo.Save(ctx, user); err != nil {
 			return "", fmt.Errorf("saving user: %w", err)
-		}
-
-		if err := h.publisher.Publish(ctx, user.PopDomainEvents()...); err != nil {
-			return "", fmt.Errorf("publishing events: %w", err)
 		}
 
 		return user.ID().String(), nil

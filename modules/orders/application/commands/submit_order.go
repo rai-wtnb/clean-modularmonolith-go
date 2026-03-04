@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
-	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction"
 )
 
@@ -15,26 +14,20 @@ type SubmitOrderCommand struct {
 }
 
 type SubmitOrderHandler struct {
-	repo      domain.OrderRepository
-	txScope   transaction.Scope
-	publisher events.Publisher
+	repo    domain.OrderRepository
+	txScope transaction.Scope
 }
 
-func NewSubmitOrderHandler(
-	repo domain.OrderRepository,
-	txScope transaction.Scope,
-	publisher events.Publisher,
-) *SubmitOrderHandler {
+func NewSubmitOrderHandler(repo domain.OrderRepository, txScope transaction.Scope) *SubmitOrderHandler {
 	return &SubmitOrderHandler{
-		repo:      repo,
-		txScope:   txScope,
-		publisher: publisher,
+		repo:    repo,
+		txScope: txScope,
 	}
 }
 
 // Handle executes the submit order use case.
-// The operation runs within a transaction, and domain events are dispatched
-// before commit, allowing event handlers to participate in the same transaction.
+// The operation runs within a transaction. Domain events are collected
+// in the context and automatically published by EventAwareScope.
 //
 // NOTE: OrderSubmittedEvent is dispatched within the transaction, but
 // notification handlers (e.g., email) should NOT run here. They should
@@ -46,22 +39,17 @@ func (h *SubmitOrderHandler) Handle(ctx context.Context, cmd SubmitOrderCommand)
 	}
 
 	return h.txScope.Execute(ctx, func(ctx context.Context) error {
-
 		order, err := h.repo.FindByID(ctx, orderID)
 		if err != nil {
 			return fmt.Errorf("finding order: %w", err)
 		}
 
-		if err := order.Submit(); err != nil {
+		if err := order.Submit(ctx); err != nil {
 			return err
 		}
 
 		if err := h.repo.Save(ctx, order); err != nil {
 			return fmt.Errorf("saving order: %w", err)
-		}
-
-		if err := h.publisher.Publish(ctx, order.PopDomainEvents()...); err != nil {
-			return fmt.Errorf("publishing events: %w", err)
 		}
 
 		return nil

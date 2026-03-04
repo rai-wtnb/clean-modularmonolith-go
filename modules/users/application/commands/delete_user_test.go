@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/events/contracts"
 	"github.com/rai/clean-modularmonolith-go/modules/users/application/commands"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
@@ -38,20 +39,28 @@ func (m *mockUserRepository) FindAll(ctx context.Context, offset, limit int) ([]
 	return nil, 0, nil
 }
 
-type mockTransactionScope struct {
-	executeFn func(ctx context.Context, fn func(ctx context.Context) error) error
+// mockEventAwareScope simulates EventAwareScope behavior:
+// initializes event collector, runs fn, then collects events.
+type mockEventAwareScope struct {
+	executeFn       func(ctx context.Context, fn func(ctx context.Context) error) error
+	collectedEvents []events.Event
 }
 
-func (m *mockTransactionScope) Execute(ctx context.Context, fn func(ctx context.Context) error) error {
+func (m *mockEventAwareScope) Execute(ctx context.Context, fn func(ctx context.Context) error) error {
 	return m.executeFn(ctx, fn)
 }
 
-type mockPublisher struct {
-	publishFn func(ctx context.Context, evts ...events.Event) error
-}
-
-func (m *mockPublisher) Publish(ctx context.Context, evts ...events.Event) error {
-	return m.publishFn(ctx, evts...)
+func newMockEventAwareScope() *mockEventAwareScope {
+	mock := &mockEventAwareScope{}
+	mock.executeFn = func(ctx context.Context, fn func(ctx context.Context) error) error {
+		ctx = events.NewContext(ctx)
+		if err := fn(ctx); err != nil {
+			return err
+		}
+		mock.collectedEvents = events.Collect(ctx)
+		return nil
+	}
+	return mock
 }
 
 // --- Tests ---
@@ -62,7 +71,6 @@ func TestDeleteUserHandler_Handle_Success(t *testing.T) {
 	user := createTestUser(t, userID)
 
 	var savedUser *domain.User
-	var publishedEvents []events.Event
 
 	repo := &mockUserRepository{
 		findByIDFn: func(ctx context.Context, id domain.UserID) (*domain.User, error) {
@@ -77,20 +85,8 @@ func TestDeleteUserHandler_Handle_Success(t *testing.T) {
 		},
 	}
 
-	publisher := &mockPublisher{
-		publishFn: func(ctx context.Context, evts ...events.Event) error {
-			publishedEvents = evts
-			return nil
-		},
-	}
-
-	txScope := &mockTransactionScope{
-		executeFn: func(ctx context.Context, fn func(ctx context.Context) error) error {
-			return fn(ctx)
-		},
-	}
-
-	handler := commands.NewDeleteUserHandler(repo, txScope, publisher)
+	txScope := newMockEventAwareScope()
+	handler := commands.NewDeleteUserHandler(repo, txScope)
 
 	// Act
 	err := handler.Handle(context.Background(), commands.DeleteUserCommand{
@@ -109,12 +105,12 @@ func TestDeleteUserHandler_Handle_Success(t *testing.T) {
 		t.Errorf("expected user status to be deleted, got %s", savedUser.Status())
 	}
 
-	if len(publishedEvents) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(publishedEvents))
+	if len(txScope.collectedEvents) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(txScope.collectedEvents))
 	}
-	deletedEvent, ok := publishedEvents[0].(domain.UserDeletedEvent)
+	deletedEvent, ok := txScope.collectedEvents[0].(contracts.UserDeletedEvent)
 	if !ok {
-		t.Fatalf("expected domain.UserDeletedEvent, got %T", publishedEvents[0])
+		t.Fatalf("expected contracts.UserDeletedEvent, got %T", txScope.collectedEvents[0])
 	}
 	if deletedEvent.UserID != userID.String() {
 		t.Errorf("expected event userID %s, got %s", userID, deletedEvent.UserID)
@@ -122,7 +118,7 @@ func TestDeleteUserHandler_Handle_Success(t *testing.T) {
 }
 
 func TestDeleteUserHandler_Handle_InvalidUserID(t *testing.T) {
-	handler := commands.NewDeleteUserHandler(nil, nil, nil)
+	handler := commands.NewDeleteUserHandler(nil, nil)
 
 	err := handler.Handle(context.Background(), commands.DeleteUserCommand{
 		UserID: "invalid-uuid",
@@ -150,20 +146,8 @@ func TestDeleteUserHandler_Handle_UserNotFound(t *testing.T) {
 		},
 	}
 
-	publisher := &mockPublisher{
-		publishFn: func(ctx context.Context, evts ...events.Event) error {
-			t.Fatal("Publish should not be called when user is not found")
-			return nil
-		},
-	}
-
-	txScope := &mockTransactionScope{
-		executeFn: func(ctx context.Context, fn func(ctx context.Context) error) error {
-			return fn(ctx)
-		},
-	}
-
-	handler := commands.NewDeleteUserHandler(repo, txScope, publisher)
+	txScope := newMockEventAwareScope()
+	handler := commands.NewDeleteUserHandler(repo, txScope)
 
 	err := handler.Handle(context.Background(), commands.DeleteUserCommand{
 		UserID: userID.String(),
@@ -191,20 +175,8 @@ func TestDeleteUserHandler_Handle_SaveError(t *testing.T) {
 		},
 	}
 
-	publisher := &mockPublisher{
-		publishFn: func(ctx context.Context, evts ...events.Event) error {
-			t.Fatal("Publish should not be called when save fails")
-			return nil
-		},
-	}
-
-	txScope := &mockTransactionScope{
-		executeFn: func(ctx context.Context, fn func(ctx context.Context) error) error {
-			return fn(ctx)
-		},
-	}
-
-	handler := commands.NewDeleteUserHandler(repo, txScope, publisher)
+	txScope := newMockEventAwareScope()
+	handler := commands.NewDeleteUserHandler(repo, txScope)
 
 	err := handler.Handle(context.Background(), commands.DeleteUserCommand{
 		UserID: userID.String(),
@@ -218,57 +190,17 @@ func TestDeleteUserHandler_Handle_SaveError(t *testing.T) {
 	}
 }
 
-func TestDeleteUserHandler_Handle_PublishError(t *testing.T) {
-	userID := domain.NewUserID()
-	user := createTestUser(t, userID)
-	errPublish := errors.New("publish failed")
-
-	repo := &mockUserRepository{
-		findByIDFn: func(ctx context.Context, id domain.UserID) (*domain.User, error) {
-			return user, nil
-		},
-		saveFn: func(ctx context.Context, u *domain.User) error {
-			return nil
-		},
-	}
-
-	publisher := &mockPublisher{
-		publishFn: func(ctx context.Context, evts ...events.Event) error {
-			return errPublish
-		},
-	}
-
-	txScope := &mockTransactionScope{
-		executeFn: func(ctx context.Context, fn func(ctx context.Context) error) error {
-			return fn(ctx)
-		},
-	}
-
-	handler := commands.NewDeleteUserHandler(repo, txScope, publisher)
-
-	err := handler.Handle(context.Background(), commands.DeleteUserCommand{
-		UserID: userID.String(),
-	})
-
-	if err == nil {
-		t.Fatal("expected error when publish fails")
-	}
-	if !errors.Is(err, errPublish) {
-		t.Errorf("expected errPublish, got %v", err)
-	}
-}
-
 func TestDeleteUserHandler_Handle_TransactionError(t *testing.T) {
 	userID := domain.NewUserID()
 	errTx := errors.New("transaction failed")
 
-	txScope := &mockTransactionScope{
+	txScope := &mockEventAwareScope{
 		executeFn: func(ctx context.Context, fn func(ctx context.Context) error) error {
-			return errTx // トランザクション自体が失敗
+			return errTx
 		},
 	}
 
-	handler := commands.NewDeleteUserHandler(nil, txScope, nil)
+	handler := commands.NewDeleteUserHandler(nil, txScope)
 
 	err := handler.Handle(context.Background(), commands.DeleteUserCommand{
 		UserID: userID.String(),

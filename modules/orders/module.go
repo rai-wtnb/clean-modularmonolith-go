@@ -12,8 +12,8 @@ import (
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
 	httphandler "github.com/rai/clean-modularmonolith-go/modules/orders/infrastructure/http"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
-	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events/contracts"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction"
 )
 
 // Module is the public API for the orders bounded context.
@@ -51,11 +51,15 @@ func New(cfg Config) Module {
 	}
 	logger = logger.With("module", "orders")
 
-	createOrderHandler := commands.NewCreateOrderHandler(cfg.Repository, cfg.TransactionScope, cfg.Publisher)
+	// Wrap the transaction scope with event-aware scope that automatically
+	// collects domain events from context and publishes them after success.
+	txScope := transaction.NewEventAwareScope(cfg.TransactionScope, cfg.Publisher)
+
+	createOrderHandler := commands.NewCreateOrderHandler(cfg.Repository, txScope)
 	addItemHandler := commands.NewAddItemHandler(cfg.Repository)
 	removeItemHandler := commands.NewRemoveItemHandler(cfg.Repository)
-	submitOrderHandler := commands.NewSubmitOrderHandler(cfg.Repository, cfg.TransactionScope, cfg.Publisher)
-	cancelOrderHandler := commands.NewCancelOrderHandler(cfg.Repository, cfg.TransactionScope, cfg.Publisher)
+	submitOrderHandler := commands.NewSubmitOrderHandler(cfg.Repository, txScope)
+	cancelOrderHandler := commands.NewCancelOrderHandler(cfg.Repository, txScope)
 
 	getOrderHandler := queries.NewGetOrderHandler(cfg.Repository)
 	listUserOrdersHandler := queries.NewListUserOrdersHandler(cfg.Repository)

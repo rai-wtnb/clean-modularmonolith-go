@@ -3,16 +3,15 @@
 package domain
 
 import (
+	"context"
 	"time"
 
-	shareddomain "github.com/rai/clean-modularmonolith-go/modules/shared/domain"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
 )
 
 // User is the aggregate root for the user bounded context.
 // It encapsulates all user-related business rules.
 type User struct {
-	shareddomain.AggregateRoot
-
 	id        UserID
 	email     Email
 	name      Name
@@ -23,18 +22,17 @@ type User struct {
 
 // NewUser creates a new User with validated inputs.
 // Factory function enforces all invariants at creation time.
-// Adds UserCreatedEvent to be dispatched after persistence.
-func NewUser(email Email, name Name) *User {
+// Adds UserCreatedEvent to the context for later dispatch.
+func NewUser(ctx context.Context, email Email, name Name) *User {
 	u := &User{
-		AggregateRoot: shareddomain.NewAggregateRoot(),
-		id:            NewUserID(),
-		email:         email,
-		name:          name,
-		status:        StatusActive,
-		createdAt:     time.Now().UTC(),
-		updatedAt:     time.Now().UTC(),
+		id:        NewUserID(),
+		email:     email,
+		name:      name,
+		status:    StatusActive,
+		createdAt: time.Now().UTC(),
+		updatedAt: time.Now().UTC(),
 	}
-	u.AddDomainEvent(newUserCreatedEvent(u))
+	events.Add(ctx, newUserCreatedEvent(u))
 	return u
 }
 
@@ -64,26 +62,26 @@ func (u *User) UpdatedAt() time.Time { return u.updatedAt }
 // Business methods - encapsulate business rules
 
 // UpdateProfile updates the user's profile information.
-// Adds UserUpdatedEvent to be dispatched after persistence.
-func (u *User) UpdateProfile(name Name) error {
+// Adds UserUpdatedEvent to the context for later dispatch.
+func (u *User) UpdateProfile(ctx context.Context, name Name) error {
 	if u.status == StatusDeleted {
 		return ErrUserDeleted
 	}
 	u.name = name
 	u.updatedAt = time.Now().UTC()
-	u.AddDomainEvent(newUserUpdatedEvent(u))
+	events.Add(ctx, newUserUpdatedEvent(u))
 	return nil
 }
 
 // ChangeEmail changes the user's email address.
-// Adds UserUpdatedEvent to be dispatched after persistence.
-func (u *User) ChangeEmail(email Email) error {
+// Adds UserUpdatedEvent to the context for later dispatch.
+func (u *User) ChangeEmail(ctx context.Context, email Email) error {
 	if u.status == StatusDeleted {
 		return ErrUserDeleted
 	}
 	u.email = email
 	u.updatedAt = time.Now().UTC()
-	u.AddDomainEvent(newUserUpdatedEvent(u))
+	events.Add(ctx, newUserUpdatedEvent(u))
 	return nil
 }
 
@@ -108,11 +106,12 @@ func (u *User) Activate() error {
 }
 
 // Delete marks the user as deleted (soft delete).
-// Adds UserDeletedEvent to be dispatched after persistence.
-func (u *User) Delete() error {
+// Adds UserDeletedEvent to the context for later dispatch.
+func (u *User) Delete(ctx context.Context) error {
 	u.status = StatusDeleted
 	u.updatedAt = time.Now().UTC()
-	u.AddDomainEvent(newUserDeletedEvent(u.id))
+
+	events.Add(ctx, newUserDeletedEvent(u.id))
 	return nil
 }
 

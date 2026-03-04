@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
@@ -16,22 +15,20 @@ type DeleteUserCommand struct {
 
 // DeleteUserHandler handles the DeleteUserCommand.
 type DeleteUserHandler struct {
-	repo           domain.UserRepository
-	txScope        transaction.Scope
-	eventPublisher events.Publisher
+	repo    domain.UserRepository
+	txScope transaction.Scope
 }
 
-func NewDeleteUserHandler(repo domain.UserRepository, txScope transaction.Scope, eventPublisher events.Publisher) *DeleteUserHandler {
+func NewDeleteUserHandler(repo domain.UserRepository, txScope transaction.Scope) *DeleteUserHandler {
 	return &DeleteUserHandler{
-		repo:           repo,
-		txScope:        txScope,
-		eventPublisher: eventPublisher,
+		repo:    repo,
+		txScope: txScope,
 	}
 }
 
 // Handle executes the delete user use case.
-// The operation runs within a transaction, and domain events are dispatched
-// before commit, allowing event handlers to participate in the same transaction.
+// The operation runs within a transaction. Domain events are collected
+// in the context and automatically published by EventAwareScope.
 func (h *DeleteUserHandler) Handle(ctx context.Context, cmd DeleteUserCommand) error {
 	userID, err := domain.ParseUserID(cmd.UserID)
 	if err != nil {
@@ -44,16 +41,12 @@ func (h *DeleteUserHandler) Handle(ctx context.Context, cmd DeleteUserCommand) e
 			return fmt.Errorf("finding user: %w", err)
 		}
 
-		if err := user.Delete(); err != nil {
+		if err := user.Delete(ctx); err != nil {
 			return fmt.Errorf("deleting user: %w", err)
 		}
 
 		if err := h.repo.Save(ctx, user); err != nil {
 			return fmt.Errorf("saving user: %w", err)
-		}
-
-		if err := h.eventPublisher.Publish(ctx, user.PopDomainEvents()...); err != nil {
-			return fmt.Errorf("publishing events: %w", err)
 		}
 
 		return nil

@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
-	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction"
 )
 
@@ -16,26 +15,20 @@ type CreateOrderCommand struct {
 }
 
 type CreateOrderHandler struct {
-	repo      domain.OrderRepository
-	txScope   transaction.Scope
-	publisher events.Publisher
+	repo    domain.OrderRepository
+	txScope transaction.Scope
 }
 
-func NewCreateOrderHandler(
-	repo domain.OrderRepository,
-	txScope transaction.Scope,
-	publisher events.Publisher,
-) *CreateOrderHandler {
+func NewCreateOrderHandler(repo domain.OrderRepository, txScope transaction.Scope) *CreateOrderHandler {
 	return &CreateOrderHandler{
-		repo:      repo,
-		txScope:   txScope,
-		publisher: publisher,
+		repo:    repo,
+		txScope: txScope,
 	}
 }
 
 // Handle executes the create order use case.
-// The operation runs within a transaction, and domain events are dispatched
-// before commit, allowing event handlers to participate in the same transaction.
+// The operation runs within a transaction. Domain events are collected
+// in the context and automatically published by EventAwareScope.
 func (h *CreateOrderHandler) Handle(ctx context.Context, cmd CreateOrderCommand) (string, error) {
 	userRef, err := domain.NewUserRef(cmd.UserID)
 	if err != nil {
@@ -43,17 +36,12 @@ func (h *CreateOrderHandler) Handle(ctx context.Context, cmd CreateOrderCommand)
 	}
 
 	return transaction.ExecuteWithResult(ctx, h.txScope, func(ctx context.Context) (string, error) {
-		// Create the order aggregate (adds OrderCreatedEvent internally)
-		order := domain.NewOrder(userRef)
+		// Create the order aggregate (adds OrderCreatedEvent to ctx)
+		order := domain.NewOrder(ctx, userRef)
 
 		// Persist the order
 		if err := h.repo.Save(ctx, order); err != nil {
 			return "", fmt.Errorf("saving order: %w", err)
-		}
-
-		// Publish events (handlers execute immediately within same transaction)
-		if err := h.publisher.Publish(ctx, order.PopDomainEvents()...); err != nil {
-			return "", fmt.Errorf("publishing events: %w", err)
 		}
 
 		return order.ID().String(), nil

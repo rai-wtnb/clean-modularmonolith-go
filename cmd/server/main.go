@@ -62,10 +62,10 @@ func main() {
 	// Initialize modules
 	// Each module subscribes to events it cares about internally
 	usersCfg := users.Config{
-		Repository:               usersRepo,
+		Repository:                usersRepo,
 		ReadWriteTransactionScope: txScope,
-		ReadOnlyTransactionScope: roTxScope,
-		Publisher:                eventBus,
+		ReadOnlyTransactionScope:  roTxScope,
+		Publisher:                 eventBus,
 	}
 	usersModule := users.New(usersCfg)
 
