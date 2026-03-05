@@ -65,7 +65,7 @@ func New(cfg Config) Module {
 	listUserOrdersHandler := queries.NewListUserOrdersHandler(cfg.Repository)
 
 	if cfg.Subscriber != nil {
-		userDeletedHandler := eventhandlers.NewUserDeletedHandler(cfg.Repository, logger)
+		userDeletedHandler := eventhandlers.NewUserDeletedHandler(cfg.Repository, cfg.TransactionScope, logger)
 		if err := cfg.Subscriber.Subscribe(contracts.UserDeletedEventType, userDeletedHandler); err != nil {
 			logger.Error("failed to subscribe to user deleted event", slog.Any("error", err))
 		}
