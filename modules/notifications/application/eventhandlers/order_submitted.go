@@ -2,9 +2,11 @@ package eventhandlers
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/events/contracts"
 )
 
 // OrderSubmittedHandler handles OrderSubmitted events by sending notifications.
@@ -31,11 +33,13 @@ func (h *OrderSubmittedHandler) HandlerName() string { return "OrderSubmittedHan
 func (h *OrderSubmittedHandler) Subdomain() string    { return "notifications" }
 
 func (h *OrderSubmittedHandler) Handle(ctx context.Context, event events.Event) error {
-	// In a real application, we would unmarshal the payload to get details
-	// For this example, we just trust the event type and ID
+	e, ok := event.(contracts.OrderSubmittedEvent)
+	if !ok {
+		return fmt.Errorf("unexpected event type: %T", event)
+	}
 
 	// Mock sending email
-	h.logger.Info("sending email to user", slog.String("order_id", event.AggregateID()), slog.String("action", "order_confirmation"))
+	h.logger.Info("sending email to user", slog.String("order_id", e.OrderID), slog.String("action", "order_confirmation"))
 
 	return nil
 }

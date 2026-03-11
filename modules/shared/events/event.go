@@ -36,35 +36,30 @@ type Event interface {
 	EventType() EventType
 	// OccurredAt returns when the event occurred.
 	OccurredAt() time.Time
-	// AggregateID returns the ID of the aggregate that produced this event.
-	AggregateID() string
 }
 
 // BaseEvent provides common event fields that implements Event interface. Embed this in concrete event types.
 type BaseEvent struct {
-	id          string
-	eventType   EventType
-	timestamp   time.Time
-	aggregateId string
+	id        string
+	eventType EventType
+	timestamp time.Time
 }
 
 // NewBaseEvent creates a new BaseEvent. Panics if eventType format is invalid.
-func NewBaseEvent(eventType EventType, aggregateID string) BaseEvent {
+func NewBaseEvent(eventType EventType) BaseEvent {
 	if err := eventType.Validate(); err != nil {
 		panic(err)
 	}
 	return BaseEvent{
-		id:          uuid.New().String(), // TODO
-		eventType:   eventType,
-		timestamp:   time.Now().UTC(), // TODO
-		aggregateId: aggregateID,
+		id:        uuid.New().String(), // TODO
+		eventType: eventType,
+		timestamp: time.Now().UTC(), // TODO
 	}
 }
 
 func (e BaseEvent) EventID() string       { return e.id }
 func (e BaseEvent) EventType() EventType  { return e.eventType }
 func (e BaseEvent) OccurredAt() time.Time { return e.timestamp }
-func (e BaseEvent) AggregateID() string   { return e.aggregateId }
 
 // Publisher publishes domain events collected in the context.
 // Implementations extract events from ctx via Collect and dispatch them.

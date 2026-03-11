@@ -29,7 +29,7 @@ type UserCreatedEvent struct {
 
 func newUserCreatedEvent(user *User) UserCreatedEvent {
 	return UserCreatedEvent{
-		BaseEvent: events.NewBaseEvent(UserCreatedEventType, user.ID().String()),
+		BaseEvent: events.NewBaseEvent(UserCreatedEventType),
 		UserID:    user.ID().String(),
 		Email:     user.Email().String(),
 		FirstName: user.Name().FirstName(),
@@ -48,7 +48,7 @@ type UserUpdatedEvent struct {
 
 func newUserUpdatedEvent(user *User) UserUpdatedEvent {
 	return UserUpdatedEvent{
-		BaseEvent: events.NewBaseEvent(UserUpdatedEventType, user.ID().String()),
+		BaseEvent: events.NewBaseEvent(UserUpdatedEventType),
 		UserID:    user.ID().String(),
 		Email:     user.Email().String(),
 		FirstName: user.Name().FirstName(),
@@ -58,7 +58,7 @@ func newUserUpdatedEvent(user *User) UserUpdatedEvent {
 
 func newUserDeletedEvent(userID UserID) contracts.UserDeletedEvent {
 	return contracts.UserDeletedEvent{
-		BaseEvent: events.NewBaseEvent(UserDeletedEventType, userID.String()),
+		BaseEvent: events.NewBaseEvent(UserDeletedEventType),
 		UserID:    userID.String(),
 	}
 }

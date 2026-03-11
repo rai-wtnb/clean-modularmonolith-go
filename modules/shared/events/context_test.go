@@ -15,7 +15,7 @@ type testEvent struct {
 
 func newTestEvent() testEvent {
 	return testEvent{
-		BaseEvent: events.NewBaseEvent("test.TestHappened", "agg-1"),
+		BaseEvent: events.NewBaseEvent("test.TestHappened"),
 	}
 }
 

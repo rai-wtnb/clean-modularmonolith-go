@@ -21,7 +21,7 @@ type OrderCreatedEvent struct {
 
 func NewOrderCreatedEvent(order *Order) OrderCreatedEvent {
 	return OrderCreatedEvent{
-		BaseEvent: events.NewBaseEvent(OrderCreatedEventType, order.ID().String()),
+		BaseEvent: events.NewBaseEvent(OrderCreatedEventType),
 		OrderID:   order.ID().String(),
 		UserID:    order.UserRef().String(),
 	}
@@ -29,7 +29,7 @@ func NewOrderCreatedEvent(order *Order) OrderCreatedEvent {
 
 func NewOrderSubmittedEvent(order *Order) contracts.OrderSubmittedEvent {
 	return contracts.OrderSubmittedEvent{
-		BaseEvent:   events.NewBaseEvent(OrderSubmittedEventType, order.ID().String()),
+		BaseEvent:   events.NewBaseEvent(OrderSubmittedEventType),
 		OrderID:     order.ID().String(),
 		UserID:      order.UserRef().String(),
 		TotalAmount: order.Total().Amount(),
@@ -46,7 +46,7 @@ type OrderCancelledEvent struct {
 
 func NewOrderCancelledEvent(order *Order) OrderCancelledEvent {
 	return OrderCancelledEvent{
-		BaseEvent: events.NewBaseEvent(OrderCancelledEventType, order.ID().String()),
+		BaseEvent: events.NewBaseEvent(OrderCancelledEventType),
 		OrderID:   order.ID().String(),
 		UserID:    order.UserRef().String(),
 	}
