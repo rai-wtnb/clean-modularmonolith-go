@@ -12,7 +12,6 @@ import (
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
 	httphandler "github.com/rai/clean-modularmonolith-go/modules/orders/infrastructure/http"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
-	"github.com/rai/clean-modularmonolith-go/modules/shared/events/contracts"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction"
 )
 
@@ -66,7 +65,7 @@ func New(cfg Config) Module {
 
 	if cfg.Subscriber != nil {
 		userDeletedHandler := eventhandlers.NewUserDeletedHandler(cfg.Repository, cfg.TransactionScope, logger)
-		if err := cfg.Subscriber.Subscribe(contracts.UserDeletedEventType, userDeletedHandler); err != nil {
+		if err := cfg.Subscriber.Subscribe(userDeletedHandler.EventType(), userDeletedHandler); err != nil {
 			logger.Error("failed to subscribe to user deleted event", slog.Any("error", err))
 		}
 	}

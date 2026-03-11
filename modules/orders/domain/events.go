@@ -1,15 +1,15 @@
 package domain
 
 import (
+	orderevents "github.com/rai/clean-modularmonolith-go/modules/orders/domain/events"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
-	"github.com/rai/clean-modularmonolith-go/modules/shared/events/contracts"
 )
 
 // Internal event types (not used cross-module)
 const (
 	OrderCreatedEventType   events.EventType = "orders.OrderCreated"
 	OrderCancelledEventType events.EventType = "orders.OrderCancelled"
-	OrderSubmittedEventType                  = contracts.OrderSubmittedEventType
+	OrderSubmittedEventType                  = orderevents.OrderSubmittedEventType
 )
 
 // OrderCreatedEvent is published when a new order is created.
@@ -27,8 +27,8 @@ func NewOrderCreatedEvent(order *Order) OrderCreatedEvent {
 	}
 }
 
-func NewOrderSubmittedEvent(order *Order) contracts.OrderSubmittedEvent {
-	return contracts.OrderSubmittedEvent{
+func NewOrderSubmittedEvent(order *Order) orderevents.OrderSubmittedEvent {
+	return orderevents.OrderSubmittedEvent{
 		BaseEvent:   events.NewBaseEvent(OrderSubmittedEventType),
 		OrderID:     order.ID().String(),
 		UserID:      order.UserRef().String(),

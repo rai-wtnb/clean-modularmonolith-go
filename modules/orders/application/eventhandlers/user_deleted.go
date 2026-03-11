@@ -8,8 +8,8 @@ import (
 
 	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
-	"github.com/rai/clean-modularmonolith-go/modules/shared/events/contracts"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction"
+	userevents "github.com/rai/clean-modularmonolith-go/modules/users/domain/events"
 )
 
 // UserDeletedHandler handles UserDeleted events by canceling pending orders.
@@ -30,11 +30,12 @@ func NewUserDeletedHandler(orderRepo domain.OrderRepository, txScope transaction
 	}
 }
 
-func (h *UserDeletedHandler) HandlerName() string { return "UserDeletedHandler" }
-func (h *UserDeletedHandler) Subdomain() string   { return "orders" }
+func (h *UserDeletedHandler) HandlerName() string         { return "UserDeletedHandler" }
+func (h *UserDeletedHandler) Subdomain() string           { return "orders" }
+func (h *UserDeletedHandler) EventType() events.EventType { return userevents.UserDeletedEventType }
 
 func (h *UserDeletedHandler) Handle(ctx context.Context, event events.Event) error {
-	userDeletedEvent, ok := event.(contracts.UserDeletedEvent)
+	userDeletedEvent, ok := event.(userevents.UserDeletedEvent)
 	if !ok {
 		return fmt.Errorf("unexpected event type: %T", event)
 	}

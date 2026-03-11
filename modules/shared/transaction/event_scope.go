@@ -15,8 +15,19 @@ import (
 // Command handlers that produce domain events should depend on this interface
 // rather than the plain Scope interface.
 type ScopeWithDomainEvent interface {
-	// ExecuteWithPublish runs the given function within a transaction,
-	// collecting domain events and publishing them after successful execution.
+	// ExecuteWithPublish runs fn within a transaction, collects domain events,
+	// and publishes them before the transaction commits.
+	//
+	// Publishing is intentionally inside the transaction boundary: if publishing
+	// fails (e.g. a handler returns an error), the transaction is rolled back,
+	// preserving strong consistency between the write and its side effects.
+	// This relies on the in-process event bus; once handlers are migrated to
+	// Pub/Sub the atomicity guarantee must be provided by an outbox pattern instead.
+	//
+	// NOTE: The underlying transaction may be retried (e.g. Spanner Aborted),
+	// so fn — and therefore all subscribed handlers — can be invoked more than
+	// once per logical request. Handlers must account for this; see
+	// events.IdempotentBase for guidance.
 	ExecuteWithPublish(ctx context.Context, fn func(ctx context.Context) error) error
 }
 
@@ -52,13 +63,13 @@ func NewScopeWithDomainEvent(inner Scope, publisher events.Publisher) ScopeWithD
 }
 
 func (s *scopeWithDomainEventImpl) ExecuteWithPublish(ctx context.Context, fn func(ctx context.Context) error) error {
-	return s.inner.Execute(ctx, func(ctx context.Context) error {
-		// Fresh collector per invocation — important for Spanner retries
-		// where the same function may be called multiple times.
+	innerFn := func(ctx context.Context) error {
+		// Fresh collector per invocation — on inner retries the same fn is called again, so previous events must be discarded.
 		ctx = events.NewContext(ctx)
 		if err := fn(ctx); err != nil {
 			return err
 		}
 		return s.publisher.Publish(ctx)
-	})
+	}
+	return s.inner.Execute(ctx, innerFn)
 }

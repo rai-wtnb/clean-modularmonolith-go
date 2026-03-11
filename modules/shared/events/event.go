@@ -9,6 +9,16 @@ import (
 	"github.com/google/uuid"
 )
 
+// Event represents a domain event.
+type Event interface {
+	// EventID returns the unique identifier for this event instance.
+	EventID() string
+	// EventType returns the type name of the event (e.g., "UserCreated").
+	EventType() EventType
+	// OccurredAt returns when the event occurred.
+	OccurredAt() time.Time
+}
+
 // EventType represents a domain event type with format "module.AggregateVerb".
 // Examples: "users.UserCreated", "orders.OrderSubmitted"
 type EventType string
@@ -26,16 +36,6 @@ func (t EventType) Validate() error {
 
 func (t EventType) String() string {
 	return string(t)
-}
-
-// Event represents a domain event.
-type Event interface {
-	// EventID returns the unique identifier for this event instance.
-	EventID() string
-	// EventType returns the type name of the event (e.g., "UserCreated").
-	EventType() EventType
-	// OccurredAt returns when the event occurred.
-	OccurredAt() time.Time
 }
 
 // BaseEvent provides common event fields that implements Event interface. Embed this in concrete event types.
@@ -74,6 +74,8 @@ type Handler interface {
 	HandlerName() string
 	// Subdomain returns the subdomain this handler belongs to (e.g., "orders").
 	Subdomain() string
+	// EventType returns the domain event type this handler subscribes to.
+	EventType() EventType
 }
 
 // Subscriber subscribes to domain events.
