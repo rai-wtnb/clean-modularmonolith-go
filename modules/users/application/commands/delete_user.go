@@ -16,10 +16,10 @@ type DeleteUserCommand struct {
 // DeleteUserHandler handles the DeleteUserCommand.
 type DeleteUserHandler struct {
 	repo    domain.UserRepository
-	txScope transaction.Scope
+	txScope transaction.ScopeWithDomainEvent
 }
 
-func NewDeleteUserHandler(repo domain.UserRepository, txScope transaction.Scope) *DeleteUserHandler {
+func NewDeleteUserHandler(repo domain.UserRepository, txScope transaction.ScopeWithDomainEvent) *DeleteUserHandler {
 	return &DeleteUserHandler{
 		repo:    repo,
 		txScope: txScope,
@@ -27,8 +27,6 @@ func NewDeleteUserHandler(repo domain.UserRepository, txScope transaction.Scope)
 }
 
 // Handle executes the delete user use case.
-// The operation runs within a transaction. Domain events are collected
-// in the context and automatically published by EventAwareScope.
 func (h *DeleteUserHandler) Handle(ctx context.Context, cmd DeleteUserCommand) error {
 	userID, err := domain.ParseUserID(cmd.UserID)
 	if err != nil {
@@ -51,5 +49,5 @@ func (h *DeleteUserHandler) Handle(ctx context.Context, cmd DeleteUserCommand) e
 
 		return nil
 	}
-	return h.txScope.Execute(ctx, fn)
+	return h.txScope.ExecuteWithPublish(ctx, fn)
 }

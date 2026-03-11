@@ -51,9 +51,9 @@ func New(cfg Config) Module {
 	}
 	logger = logger.With("module", "orders")
 
-	// Wrap the transaction scope with event-aware scope that automatically
+	// Wrap the transaction scope with ScopeWithDomainEvent that automatically
 	// collects domain events from context and publishes them after success.
-	txScope := transaction.NewEventAwareScope(cfg.TransactionScope, cfg.Publisher)
+	txScope := transaction.NewScopeWithDomainEvent(cfg.TransactionScope, cfg.Publisher)
 
 	createOrderHandler := commands.NewCreateOrderHandler(cfg.Repository, txScope)
 	addItemHandler := commands.NewAddItemHandler(cfg.Repository)

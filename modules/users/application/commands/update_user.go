@@ -18,10 +18,10 @@ type UpdateUserCommand struct {
 // UpdateUserHandler handles the UpdateUserCommand.
 type UpdateUserHandler struct {
 	repo    domain.UserRepository
-	txScope transaction.Scope
+	txScope transaction.ScopeWithDomainEvent
 }
 
-func NewUpdateUserHandler(repo domain.UserRepository, txScope transaction.Scope) *UpdateUserHandler {
+func NewUpdateUserHandler(repo domain.UserRepository, txScope transaction.ScopeWithDomainEvent) *UpdateUserHandler {
 	return &UpdateUserHandler{
 		repo:    repo,
 		txScope: txScope,
@@ -29,8 +29,6 @@ func NewUpdateUserHandler(repo domain.UserRepository, txScope transaction.Scope)
 }
 
 // Handle executes the update user use case.
-// The operation runs within a transaction. Domain events are collected
-// in the context and automatically published by EventAwareScope.
 func (h *UpdateUserHandler) Handle(ctx context.Context, cmd UpdateUserCommand) error {
 	userID, err := domain.ParseUserID(cmd.UserID)
 	if err != nil {
@@ -58,5 +56,5 @@ func (h *UpdateUserHandler) Handle(ctx context.Context, cmd UpdateUserCommand) e
 
 		return nil
 	}
-	return h.txScope.Execute(ctx, fn)
+	return h.txScope.ExecuteWithPublish(ctx, fn)
 }

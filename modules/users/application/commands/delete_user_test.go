@@ -39,19 +39,19 @@ func (m *mockUserRepository) FindAll(ctx context.Context, offset, limit int) ([]
 	return nil, 0, nil
 }
 
-// mockEventAwareScope simulates EventAwareScope behavior:
+// mockScopeWithDomainEvent simulates ScopeWithDomainEvent behavior:
 // initializes event collector, runs fn, then collects events.
-type mockEventAwareScope struct {
+type mockScopeWithDomainEvent struct {
 	executeFn       func(ctx context.Context, fn func(ctx context.Context) error) error
 	collectedEvents []events.Event
 }
 
-func (m *mockEventAwareScope) Execute(ctx context.Context, fn func(ctx context.Context) error) error {
+func (m *mockScopeWithDomainEvent) ExecuteWithPublish(ctx context.Context, fn func(ctx context.Context) error) error {
 	return m.executeFn(ctx, fn)
 }
 
-func newMockEventAwareScope() *mockEventAwareScope {
-	mock := &mockEventAwareScope{}
+func newMockScopeWithDomainEvent() *mockScopeWithDomainEvent {
+	mock := &mockScopeWithDomainEvent{}
 	mock.executeFn = func(ctx context.Context, fn func(ctx context.Context) error) error {
 		ctx = events.NewContext(ctx)
 		if err := fn(ctx); err != nil {
@@ -85,7 +85,7 @@ func TestDeleteUserHandler_Handle_Success(t *testing.T) {
 		},
 	}
 
-	txScope := newMockEventAwareScope()
+	txScope := newMockScopeWithDomainEvent()
 	handler := commands.NewDeleteUserHandler(repo, txScope)
 
 	// Act
@@ -146,7 +146,7 @@ func TestDeleteUserHandler_Handle_UserNotFound(t *testing.T) {
 		},
 	}
 
-	txScope := newMockEventAwareScope()
+	txScope := newMockScopeWithDomainEvent()
 	handler := commands.NewDeleteUserHandler(repo, txScope)
 
 	err := handler.Handle(context.Background(), commands.DeleteUserCommand{
@@ -175,7 +175,7 @@ func TestDeleteUserHandler_Handle_SaveError(t *testing.T) {
 		},
 	}
 
-	txScope := newMockEventAwareScope()
+	txScope := newMockScopeWithDomainEvent()
 	handler := commands.NewDeleteUserHandler(repo, txScope)
 
 	err := handler.Handle(context.Background(), commands.DeleteUserCommand{
@@ -194,7 +194,7 @@ func TestDeleteUserHandler_Handle_TransactionError(t *testing.T) {
 	userID := domain.NewUserID()
 	errTx := errors.New("transaction failed")
 
-	txScope := &mockEventAwareScope{
+	txScope := &mockScopeWithDomainEvent{
 		executeFn: func(ctx context.Context, fn func(ctx context.Context) error) error {
 			return errTx
 		},

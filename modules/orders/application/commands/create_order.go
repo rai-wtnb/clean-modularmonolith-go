@@ -16,10 +16,10 @@ type CreateOrderCommand struct {
 
 type CreateOrderHandler struct {
 	repo    domain.OrderRepository
-	txScope transaction.Scope
+	txScope transaction.ScopeWithDomainEvent
 }
 
-func NewCreateOrderHandler(repo domain.OrderRepository, txScope transaction.Scope) *CreateOrderHandler {
+func NewCreateOrderHandler(repo domain.OrderRepository, txScope transaction.ScopeWithDomainEvent) *CreateOrderHandler {
 	return &CreateOrderHandler{
 		repo:    repo,
 		txScope: txScope,
@@ -27,15 +27,13 @@ func NewCreateOrderHandler(repo domain.OrderRepository, txScope transaction.Scop
 }
 
 // Handle executes the create order use case.
-// The operation runs within a transaction. Domain events are collected
-// in the context and automatically published by EventAwareScope.
 func (h *CreateOrderHandler) Handle(ctx context.Context, cmd CreateOrderCommand) (string, error) {
 	userRef, err := domain.NewUserRef(cmd.UserID)
 	if err != nil {
 		return "", fmt.Errorf("invalid user ID: %w", err)
 	}
 
-	return transaction.ExecuteWithResult(ctx, h.txScope, func(ctx context.Context) (string, error) {
+	return transaction.ExecuteWithPublishResult(ctx, h.txScope, func(ctx context.Context) (string, error) {
 		// Create the order aggregate (adds OrderCreatedEvent to ctx)
 		order := domain.NewOrder(ctx, userRef)
 

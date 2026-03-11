@@ -15,10 +15,10 @@ type SubmitOrderCommand struct {
 
 type SubmitOrderHandler struct {
 	repo    domain.OrderRepository
-	txScope transaction.Scope
+	txScope transaction.ScopeWithDomainEvent
 }
 
-func NewSubmitOrderHandler(repo domain.OrderRepository, txScope transaction.Scope) *SubmitOrderHandler {
+func NewSubmitOrderHandler(repo domain.OrderRepository, txScope transaction.ScopeWithDomainEvent) *SubmitOrderHandler {
 	return &SubmitOrderHandler{
 		repo:    repo,
 		txScope: txScope,
@@ -26,8 +26,6 @@ func NewSubmitOrderHandler(repo domain.OrderRepository, txScope transaction.Scop
 }
 
 // Handle executes the submit order use case.
-// The operation runs within a transaction. Domain events are collected
-// in the context and automatically published by EventAwareScope.
 //
 // NOTE: OrderSubmittedEvent is dispatched within the transaction, but
 // notification handlers (e.g., email) should NOT run here. They should
@@ -38,7 +36,7 @@ func (h *SubmitOrderHandler) Handle(ctx context.Context, cmd SubmitOrderCommand)
 		return fmt.Errorf("invalid order ID: %w", err)
 	}
 
-	return h.txScope.Execute(ctx, func(ctx context.Context) error {
+	return h.txScope.ExecuteWithPublish(ctx, func(ctx context.Context) error {
 		order, err := h.repo.FindByID(ctx, orderID)
 		if err != nil {
 			return fmt.Errorf("finding order: %w", err)

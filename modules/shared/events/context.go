@@ -23,11 +23,11 @@ func NewContext(ctx context.Context) context.Context {
 
 // Add appends domain events to the collector in ctx.
 // Panics if no collector is present — this is a programming error
-// indicating that NewContext was not called (typically via EventAwareScope).
+// indicating that NewContext was not called (typically via ScopeWithDomainEvent).
 func Add(ctx context.Context, evts ...Event) {
 	c, ok := ctx.Value(collectorKey{}).(*eventCollector)
 	if !ok {
-		panic("events.Add: no event collector in context; ensure events.NewContext was called (typically via transaction.EventAwareScope)")
+		panic("events.Add: no event collector in context; ensure events.NewContext was called (typically via transaction.ScopeWithDomainEvent)")
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()

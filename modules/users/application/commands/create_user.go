@@ -20,10 +20,10 @@ type CreateUserCommand struct {
 // CreateUserHandler handles the CreateUserCommand.
 type CreateUserHandler struct {
 	repo    domain.UserRepository
-	txScope transaction.Scope
+	txScope transaction.ScopeWithDomainEvent
 }
 
-func NewCreateUserHandler(repo domain.UserRepository, txScope transaction.Scope) *CreateUserHandler {
+func NewCreateUserHandler(repo domain.UserRepository, txScope transaction.ScopeWithDomainEvent) *CreateUserHandler {
 	return &CreateUserHandler{
 		repo:    repo,
 		txScope: txScope,
@@ -31,8 +31,6 @@ func NewCreateUserHandler(repo domain.UserRepository, txScope transaction.Scope)
 }
 
 // Handle executes the create user use case.
-// The operation runs within a transaction. Domain events are collected
-// in the context and automatically published by EventAwareScope.
 func (h *CreateUserHandler) Handle(ctx context.Context, cmd CreateUserCommand) (string, error) {
 	// Validate and create value objects (before transaction)
 	email, err := domain.NewEmail(cmd.Email)
@@ -45,7 +43,7 @@ func (h *CreateUserHandler) Handle(ctx context.Context, cmd CreateUserCommand) (
 		return "", fmt.Errorf("invalid name: %w", err)
 	}
 
-	return transaction.ExecuteWithResult(ctx, h.txScope, func(ctx context.Context) (string, error) {
+	return transaction.ExecuteWithPublishResult(ctx, h.txScope, func(ctx context.Context) (string, error) {
 		exists, err := h.repo.Exists(ctx, email)
 		if err != nil {
 			return "", fmt.Errorf("checking email existence: %w", err)

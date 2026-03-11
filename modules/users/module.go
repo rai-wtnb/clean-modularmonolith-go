@@ -41,11 +41,11 @@ type module struct {
 
 // New creates a new users module with all dependencies wired.
 func New(cfg Config) Module {
-	// Wrap the transaction scope with event-aware scope that automatically
+	// Wrap the transaction scope with ScopeWithDomainEvent that automatically
 	// collects domain events from context and publishes them after success.
-	txScope := transaction.NewEventAwareScope(cfg.ReadWriteTransactionScope, cfg.Publisher)
+	txScope := transaction.NewScopeWithDomainEvent(cfg.ReadWriteTransactionScope, cfg.Publisher)
 
-	// Wire up command handlers (no publisher needed — EventAwareScope handles it)
+	// Wire up command handlers (no publisher needed — ScopeWithDomainEvent handles it)
 	createUserHandler := commands.NewCreateUserHandler(cfg.Repository, txScope)
 	updateUserHandler := commands.NewUpdateUserHandler(cfg.Repository, txScope)
 	deleteUserHandler := commands.NewDeleteUserHandler(cfg.Repository, txScope)

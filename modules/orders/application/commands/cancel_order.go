@@ -15,10 +15,10 @@ type CancelOrderCommand struct {
 
 type CancelOrderHandler struct {
 	repo    domain.OrderRepository
-	txScope transaction.Scope
+	txScope transaction.ScopeWithDomainEvent
 }
 
-func NewCancelOrderHandler(repo domain.OrderRepository, txScope transaction.Scope) *CancelOrderHandler {
+func NewCancelOrderHandler(repo domain.OrderRepository, txScope transaction.ScopeWithDomainEvent) *CancelOrderHandler {
 	return &CancelOrderHandler{
 		repo:    repo,
 		txScope: txScope,
@@ -26,15 +26,13 @@ func NewCancelOrderHandler(repo domain.OrderRepository, txScope transaction.Scop
 }
 
 // Handle executes the cancel order use case.
-// The operation runs within a transaction. Domain events are collected
-// in the context and automatically published by EventAwareScope.
 func (h *CancelOrderHandler) Handle(ctx context.Context, cmd CancelOrderCommand) (*domain.Order, error) {
 	orderID, err := domain.ParseOrderID(cmd.OrderID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid order ID: %w", err)
 	}
 
-	return transaction.ExecuteWithResult(ctx, h.txScope, func(ctx context.Context) (*domain.Order, error) {
+	return transaction.ExecuteWithPublishResult(ctx, h.txScope, func(ctx context.Context) (*domain.Order, error) {
 		order, err := h.repo.FindByID(ctx, orderID)
 		if err != nil {
 			return nil, fmt.Errorf("finding order: %w", err)
