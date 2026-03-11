@@ -1,116 +1,44 @@
 package commands_test
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
 
-	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events/contracts"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction/txtest"
 	"github.com/rai/clean-modularmonolith-go/modules/users/application/commands"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
+	domainmocks "github.com/rai/clean-modularmonolith-go/modules/users/domain/mocks"
+	"go.uber.org/mock/gomock"
 )
 
-// --- Mocks ---
-
-type mockUserRepository struct {
-	findByIDFn func(ctx context.Context, id domain.UserID) (*domain.User, error)
-	saveFn     func(ctx context.Context, user *domain.User) error
-}
-
-func (m *mockUserRepository) FindByID(ctx context.Context, id domain.UserID) (*domain.User, error) {
-	return m.findByIDFn(ctx, id)
-}
-
-func (m *mockUserRepository) Save(ctx context.Context, user *domain.User) error {
-	return m.saveFn(ctx, user)
-}
-
-func (m *mockUserRepository) FindByEmail(ctx context.Context, email domain.Email) (*domain.User, error) {
-	return nil, nil
-}
-
-func (m *mockUserRepository) Exists(ctx context.Context, email domain.Email) (bool, error) {
-	return false, nil
-}
-
-func (m *mockUserRepository) FindAll(ctx context.Context, offset, limit int) ([]*domain.User, int, error) {
-	return nil, 0, nil
-}
-
-// mockScopeWithDomainEvent simulates ScopeWithDomainEvent behavior:
-// initializes event collector, runs fn, then collects events.
-type mockScopeWithDomainEvent struct {
-	executeFn       func(ctx context.Context, fn func(ctx context.Context) error) error
-	collectedEvents []events.Event
-}
-
-func (m *mockScopeWithDomainEvent) ExecuteWithPublish(ctx context.Context, fn func(ctx context.Context) error) error {
-	return m.executeFn(ctx, fn)
-}
-
-func newMockScopeWithDomainEvent() *mockScopeWithDomainEvent {
-	mock := &mockScopeWithDomainEvent{}
-	mock.executeFn = func(ctx context.Context, fn func(ctx context.Context) error) error {
-		ctx = events.NewContext(ctx)
-		if err := fn(ctx); err != nil {
-			return err
-		}
-		mock.collectedEvents = events.Collect(ctx)
-		return nil
-	}
-	return mock
-}
-
-// --- Tests ---
-
 func TestDeleteUserHandler_Handle_Success(t *testing.T) {
-	// Arrange
+	ctrl := gomock.NewController(t)
+
 	userID := domain.NewUserID()
 	user := createTestUser(t, userID)
 
-	var savedUser *domain.User
+	repo := domainmocks.NewMockUserRepository(ctrl)
+	gomock.InOrder(
+		repo.EXPECT().FindByID(gomock.Any(), userID).Return(user, nil),
+		repo.EXPECT().Save(gomock.Any(), deletedUser(userID)).Return(nil),
+	)
 
-	repo := &mockUserRepository{
-		findByIDFn: func(ctx context.Context, id domain.UserID) (*domain.User, error) {
-			if id.String() != userID.String() {
-				t.Errorf("expected userID %s, got %s", userID, id)
-			}
-			return user, nil
-		},
-		saveFn: func(ctx context.Context, u *domain.User) error {
-			savedUser = u
-			return nil
-		},
-	}
+	scope, capture := txtest.NewScopeCaptureEvents(ctrl)
+	handler := commands.NewDeleteUserHandler(repo, scope)
 
-	txScope := newMockScopeWithDomainEvent()
-	handler := commands.NewDeleteUserHandler(repo, txScope)
-
-	// Act
-	err := handler.Handle(context.Background(), commands.DeleteUserCommand{
-		UserID: userID.String(),
-	})
-
-	// Assert
+	err := handler.Handle(t.Context(), commands.DeleteUserCommand{UserID: userID.String()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if savedUser == nil {
-		t.Fatal("expected user to be saved")
+	if len(capture.Events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(capture.Events))
 	}
-	if savedUser.Status() != domain.StatusDeleted {
-		t.Errorf("expected user status to be deleted, got %s", savedUser.Status())
-	}
-
-	if len(txScope.collectedEvents) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(txScope.collectedEvents))
-	}
-	deletedEvent, ok := txScope.collectedEvents[0].(contracts.UserDeletedEvent)
+	deletedEvent, ok := capture.Events[0].(contracts.UserDeletedEvent)
 	if !ok {
-		t.Fatalf("expected contracts.UserDeletedEvent, got %T", txScope.collectedEvents[0])
+		t.Fatalf("expected contracts.UserDeletedEvent, got %T", capture.Events[0])
 	}
 	if deletedEvent.UserID != userID.String() {
 		t.Errorf("expected event userID %s, got %s", userID, deletedEvent.UserID)
@@ -120,9 +48,7 @@ func TestDeleteUserHandler_Handle_Success(t *testing.T) {
 func TestDeleteUserHandler_Handle_InvalidUserID(t *testing.T) {
 	handler := commands.NewDeleteUserHandler(nil, nil)
 
-	err := handler.Handle(context.Background(), commands.DeleteUserCommand{
-		UserID: "invalid-uuid",
-	})
+	err := handler.Handle(t.Context(), commands.DeleteUserCommand{UserID: "invalid-uuid"})
 
 	if err == nil {
 		t.Fatal("expected error for invalid user ID")
@@ -133,25 +59,18 @@ func TestDeleteUserHandler_Handle_InvalidUserID(t *testing.T) {
 }
 
 func TestDeleteUserHandler_Handle_UserNotFound(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
 	userID := domain.NewUserID()
 	errNotFound := errors.New("user not found")
 
-	repo := &mockUserRepository{
-		findByIDFn: func(ctx context.Context, id domain.UserID) (*domain.User, error) {
-			return nil, errNotFound
-		},
-		saveFn: func(ctx context.Context, u *domain.User) error {
-			t.Fatal("Save should not be called when user is not found")
-			return nil
-		},
-	}
+	repo := domainmocks.NewMockUserRepository(ctrl)
+	repo.EXPECT().FindByID(gomock.Any(), userID).Return(nil, errNotFound)
 
-	txScope := newMockScopeWithDomainEvent()
-	handler := commands.NewDeleteUserHandler(repo, txScope)
+	scope, capture := txtest.NewScopeCaptureEvents(ctrl)
+	handler := commands.NewDeleteUserHandler(repo, scope)
 
-	err := handler.Handle(context.Background(), commands.DeleteUserCommand{
-		UserID: userID.String(),
-	})
+	err := handler.Handle(t.Context(), commands.DeleteUserCommand{UserID: userID.String()})
 
 	if err == nil {
 		t.Fatal("expected error when user not found")
@@ -159,28 +78,28 @@ func TestDeleteUserHandler_Handle_UserNotFound(t *testing.T) {
 	if !errors.Is(err, errNotFound) {
 		t.Errorf("expected errNotFound, got %v", err)
 	}
+	if len(capture.Events) != 0 {
+		t.Errorf("expected no events on failure, got %d", len(capture.Events))
+	}
 }
 
 func TestDeleteUserHandler_Handle_SaveError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
 	userID := domain.NewUserID()
 	user := createTestUser(t, userID)
 	errSave := errors.New("save failed")
 
-	repo := &mockUserRepository{
-		findByIDFn: func(ctx context.Context, id domain.UserID) (*domain.User, error) {
-			return user, nil
-		},
-		saveFn: func(ctx context.Context, u *domain.User) error {
-			return errSave
-		},
-	}
+	repo := domainmocks.NewMockUserRepository(ctrl)
+	gomock.InOrder(
+		repo.EXPECT().FindByID(gomock.Any(), userID).Return(user, nil),
+		repo.EXPECT().Save(gomock.Any(), deletedUser(userID)).Return(errSave),
+	)
 
-	txScope := newMockScopeWithDomainEvent()
-	handler := commands.NewDeleteUserHandler(repo, txScope)
+	scope, capture := txtest.NewScopeCaptureEvents(ctrl)
+	handler := commands.NewDeleteUserHandler(repo, scope)
 
-	err := handler.Handle(context.Background(), commands.DeleteUserCommand{
-		UserID: userID.String(),
-	})
+	err := handler.Handle(t.Context(), commands.DeleteUserCommand{UserID: userID.String()})
 
 	if err == nil {
 		t.Fatal("expected error when save fails")
@@ -188,23 +107,20 @@ func TestDeleteUserHandler_Handle_SaveError(t *testing.T) {
 	if !errors.Is(err, errSave) {
 		t.Errorf("expected errSave, got %v", err)
 	}
+	if len(capture.Events) != 0 {
+		t.Errorf("expected no events on failure, got %d", len(capture.Events))
+	}
 }
 
 func TestDeleteUserHandler_Handle_TransactionError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+
 	userID := domain.NewUserID()
 	errTx := errors.New("transaction failed")
 
-	txScope := &mockScopeWithDomainEvent{
-		executeFn: func(ctx context.Context, fn func(ctx context.Context) error) error {
-			return errTx
-		},
-	}
+	handler := commands.NewDeleteUserHandler(nil, txtest.NewScopeError(ctrl, errTx))
 
-	handler := commands.NewDeleteUserHandler(nil, txScope)
-
-	err := handler.Handle(context.Background(), commands.DeleteUserCommand{
-		UserID: userID.String(),
-	})
+	err := handler.Handle(t.Context(), commands.DeleteUserCommand{UserID: userID.String()})
 
 	if err == nil {
 		t.Fatal("expected error when transaction fails")
@@ -212,6 +128,16 @@ func TestDeleteUserHandler_Handle_TransactionError(t *testing.T) {
 	if !errors.Is(err, errTx) {
 		t.Errorf("expected errTx, got %v", err)
 	}
+}
+
+// --- Matchers ---
+
+// deletedUser matches a *domain.User with the given ID that has been soft-deleted.
+func deletedUser(id domain.UserID) gomock.Matcher {
+	return gomock.Cond(func(x any) bool {
+		u, ok := x.(*domain.User)
+		return ok && u.ID() == id && u.Status() == domain.StatusDeleted
+	})
 }
 
 // --- Helper ---
@@ -229,6 +155,5 @@ func createTestUser(t *testing.T, id domain.UserID) *domain.User {
 		t.Fatalf("failed to create name: %v", err)
 	}
 
-	user := domain.Reconstitute(id, email, name, domain.StatusActive, time.Now(), time.Now())
-	return user
+	return domain.Reconstitute(id, email, name, domain.StatusActive, time.Now(), time.Now())
 }

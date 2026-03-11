@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	cloud.google.com/go/spanner v1.88.0
 	github.com/google/uuid v1.6.0
+	go.uber.org/mock v0.6.0
 	google.golang.org/api v0.269.0
 	google.golang.org/grpc v1.79.1
 )

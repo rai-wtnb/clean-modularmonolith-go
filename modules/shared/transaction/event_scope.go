@@ -1,5 +1,7 @@
 package transaction
 
+//go:generate mockgen -source=event_scope.go -destination=mocks/mock_event_scope.go -package=mocks
+
 import (
 	"context"
 
