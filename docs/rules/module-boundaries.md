@@ -37,8 +37,6 @@ Cross-module communication must use the public `Module` interface defined in `mo
 ```go
 // modules/users/module.go
 type Module interface {
-    // Public API methods only
-    GetUser(ctx context.Context, id UserID) (*UserDTO, error)
     RegisterRoutes(mux *http.ServeMux)
 }
 ```
@@ -57,8 +55,8 @@ Module B (Publisher)              Module A (Subscriber)
 ```
 
 ```go
-// GOOD: Subscribe to events
-cfg.EventSubscriber.Subscribe(userdomain.UserDeletedEventType, handler)
+// GOOD: Subscribe to events using the shared contract
+cfg.Subscriber.Subscribe(contracts.UserDeletedEventType, handler)
 
 // BAD: Call other module's internal methods
 usersModule.DeleteUserOrders(userID)  // Tight coupling!
@@ -95,16 +93,17 @@ users ──event──▶ orders
 
 ### 6. Typed IDs Across Boundaries
 
-When passing IDs across module boundaries, use the owning module's typed ID.
+When passing IDs across module boundaries (e.g., in event contracts), use primitive types (`string`) in the contract structs. Parse to typed IDs at the receiving module boundary:
 
 ```go
-// Module: orders
-type Order struct {
-    userID users.UserID  // Use users module's ID type
+// modules/shared/events/contracts/users.go
+type UserDeletedEvent struct {
+    events.BaseEvent
+    UserID string `json:"user_id"`  // Primitive — no module coupling
 }
 
-// When parsing from external input
-userID, err := users.ParseUserID(request.UserID)
+// In the event handler (orders module)
+userID, err := domain.ParseUserID(e.UserID)  // Parse at boundary
 ```
 
 **Why:** Typed IDs prevent mixing up IDs from different aggregates.

@@ -89,17 +89,17 @@ The `EventBus` tracks event processing depth via context, not instance state. Th
 - A single `EventBus` instance is safely shared
 
 ```go
-// EventBus is injected into command handlers
+// Command handlers use ScopeWithDomainEvent (not plain Scope)
 type DeleteUserHandler struct {
-    repo      domain.UserRepository
-    txScope   transaction.TransactionScope
-    publisher events.Publisher  // EventBus
+    repo    domain.UserRepository
+    txScope transaction.ScopeWithDomainEvent
 }
 
 func (h *DeleteUserHandler) Handle(ctx context.Context, cmd DeleteUserCommand) error {
-    return h.txScope.Execute(ctx, func(ctx context.Context) error {
-        // ... business logic ...
-        return h.publisher.Publish(ctx, events...) // Depth tracked via ctx
+    return h.txScope.ExecuteWithPublish(ctx, func(ctx context.Context) error {
+        // ... business logic — events added to ctx collector via events.Add(ctx, ...) ...
+        // ScopeWithDomainEvent calls EventBus.Publish(ctx) after fn succeeds
+        return nil
     })
 }
 ```
@@ -162,7 +162,7 @@ Transaction Commit → Event Published → Handler Reads (sees committed data)
 |------------|:-------------:|:-----------------:|
 | No external side effects | **Required** | Allowed |
 | Use DML (not Mutations) | **Required** | N/A |
-| Fresh publisher per retry | **Required** | N/A |
+| Fresh event collector per retry | **Required** | N/A |
 | Handler error = rollback | Yes | No |
 | Idempotency | Nice to have | **Required** |
 | Data consistency | Strong | Eventual |

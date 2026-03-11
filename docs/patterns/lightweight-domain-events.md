@@ -30,26 +30,27 @@ If the handler fails, the original change is already committed, leading to incon
 
 The implementation combines three patterns:
 
-1. **Aggregate-collected Events**: Aggregates collect domain events internally during business operations
+1. **Context-collected Events**: Aggregates add domain events to a context-bound collector during business operations
 2. **Transaction-scoped Event Bus**: Events trigger handlers synchronously within a transaction
 3. **Context-based Transaction Propagation**: Transaction is embedded in context for repositories
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
-│                           TransactionScope                               │
+│                       ScopeWithDomainEvent                               │
 │  ┌─────────────────┐                    ┌───────────────────────────┐   │
-│  │   Aggregate     │  PopDomainEvents() │       EventBus            │   │
-│  │  ┌───────────┐  │ ─────────────────► │                           │   │
-│  │  │ events[]  │  │                    │  Publish() executes       │   │
-│  │  └───────────┘  │                    │  handlers immediately     │   │
-│  └─────────────────┘                    │            │              │   │
-│         │                               │            ▼              │   │
-│         │ Save()                        │  ┌─────────────────────┐  │   │
-│         ▼                               │  │  Handler A          │  │   │
-│  ┌─────────────────┐                    │  │  (same ctx = tx)    │  │   │
-│  │  Repository     │◄───────────────────│  └─────────────────────┘  │   │
-│  │  (TxFromCtx)    │                    │            │              │   │
-│  └─────────────────┘                    │            ▼              │   │
+│  │   Aggregate     │  events.Add(ctx)   │       EventBus            │   │
+│  │                 │ ─────────────────► │                           │   │
+│  │  Delete(ctx)    │  (ctx collector)   │  Publish(ctx) drains      │   │
+│  └─────────────────┘                    │  collector, dispatches    │   │
+│         │                               │  handlers in parallel     │   │
+│         │ Save()                        │            │              │   │
+│         ▼                               │            ▼              │   │
+│  ┌─────────────────┐                    │  ┌─────────────────────┐  │   │
+│  │  Repository     │◄───────────────────│  │  Handler A          │  │   │
+│  │  (TxFromCtx)    │                    │  │  (same ctx = tx)    │  │   │
+│  └─────────────────┘                    │  └─────────────────────┘  │   │
+│                                         │            │              │   │
+│                                         │            ▼              │   │
 │                                         │  ┌─────────────────────┐  │   │
 │                                         │  │  Handler B          │  │   │
 │                                         │  └─────────────────────┘  │   │
@@ -59,67 +60,74 @@ The implementation combines three patterns:
 
 ## Components
 
-### 1. AggregateRoot Base Structure
+### 1. Context-based Event Collection
 
-Embed `AggregateRoot` in domain aggregates to collect events during business operations:
+Aggregates call `events.Add(ctx, event)` directly in business methods. No embedded base struct is needed:
 
 ```go
-// modules/shared/domain/aggregate.go
-type AggregateRoot struct {
-    domainEvents []events.Event
-}
-
-func (a *AggregateRoot) AddDomainEvent(event events.Event)
-func (a *AggregateRoot) PopDomainEvents() []events.Event
+// modules/shared/events/context.go
+func NewContext(ctx context.Context) context.Context  // Initializes fresh collector
+func Add(ctx context.Context, evts ...Event)           // Adds events to collector
+func Collect(ctx context.Context) []Event              // Drains and returns all events
 ```
 
 Usage in aggregate:
 
 ```go
 type User struct {
-    domain.AggregateRoot  // Embed base
     id     UserID
     status Status
 }
 
-func (u *User) Delete() error {
+func (u *User) Delete(ctx context.Context) error {
     u.status = StatusDeleted
-    u.AddDomainEvent(NewUserDeletedEvent(u.id))  // Collect event
+    events.Add(ctx, newUserDeletedEvent(u.id))  // Add to ctx collector
     return nil
 }
 ```
 
-### 2. TransactionScope
+### 2. transaction.Scope
 
-Manages transaction lifecycle with a clean functional interface:
+Base interface for transaction lifecycle (`modules/shared/transaction/scope.go`):
 
 ```go
-// internal/platform/transaction/scope.go
-type TransactionScope interface {
+type Scope interface {
     Execute(ctx context.Context, fn func(ctx context.Context) error) error
 }
 ```
 
-The Spanner implementation embeds the transaction in context:
+### 3. transaction.ScopeWithDomainEvent
+
+Wraps `Scope` with automatic event collection and publishing (`modules/shared/transaction/event_scope.go`):
 
 ```go
-func (s *SpannerTransactionScope) Execute(ctx context.Context, fn func(ctx context.Context) error) error {
-    _, err := s.client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
-        ctx = WithTx(ctx, txn)  // Embed transaction in context
-        return fn(ctx)
+type ScopeWithDomainEvent interface {
+    ExecuteWithPublish(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
+func NewScopeWithDomainEvent(inner Scope, publisher events.Publisher) ScopeWithDomainEvent
+```
+
+The implementation:
+
+```go
+func (s *scopeWithDomainEventImpl) ExecuteWithPublish(ctx context.Context, fn func(ctx context.Context) error) error {
+    return s.inner.Execute(ctx, func(ctx context.Context) error {
+        ctx = events.NewContext(ctx)  // Fresh collector per invocation (Spanner retry safe)
+        if err := fn(ctx); err != nil {
+            return err
+        }
+        return s.publisher.Publish(ctx)  // Publish after fn succeeds, before commit
     })
-    return err
 }
 ```
 
-### 3. Transaction-aware Repository
+### 4. Transaction-aware Repository
 
-Repositories check context for existing transaction:
+Repositories check context for an existing transaction:
 
 ```go
 func (r *SpannerRepository) Save(ctx context.Context, user *domain.User) error {
-    mutations := userToMutations(user)
-
     if txn, ok := transaction.TxFromContext(ctx); ok {
         return txn.BufferWrite(mutations)  // Use existing transaction
     }
@@ -128,72 +136,57 @@ func (r *SpannerRepository) Save(ctx context.Context, user *domain.User) error {
 }
 ```
 
-### 4. EventBus
+### 5. EventBus
 
-Implements both `events.Publisher` and `events.Subscriber`. Executes handlers synchronously when `Publish()` is called, with depth tracking via context:
+Implements both `events.Publisher` and `events.Subscriber`. `Publish(ctx)` drains the context collector and dispatches events synchronously using a drain loop (handlers may add new events):
 
 ```go
 // internal/platform/eventbus/eventbus.go
-type EventBus struct {
-    mu       sync.RWMutex
-    handlers map[events.EventType][]events.Handler
-    logger   *slog.Logger
-    maxDepth int
-}
-
-func (b *EventBus) Publish(ctx context.Context, events ...events.Event) error {
-    depth := b.depthFromContext(ctx)
-    if depth >= b.maxDepth {
-        return ErrEventProcessingDepthExceeded
-    }
-    ctx = context.WithValue(ctx, depthKey{}, depth+1)
-
-    for _, handler := range b.handlersFor(event.EventType()) {
-        if err := handler.Handle(ctx, event); err != nil {
-            return err  // Caller should rollback
+func (b *EventBus) Publish(ctx context.Context) error {
+    for {
+        pending := events.Collect(ctx)
+        if len(pending) == 0 {
+            return nil
+        }
+        for _, event := range pending {
+            if err := b.processEvent(ctx, event); err != nil {
+                return err
+            }
         }
     }
-    return nil
 }
 ```
 
-Depth is tracked per-context, so concurrent transactions are isolated. A single `EventBus` instance is shared across the application.
+Handlers for the same event type run in parallel (`errgroup`). Depth is tracked per-context (max 10 levels), so concurrent transactions are isolated and infinite loops are prevented.
 
-### 5. Command Handler Integration
+### 6. Command Handler Integration
 
-Putting it all together:
+Command handlers depend on `ScopeWithDomainEvent` — no publisher dependency needed:
 
 ```go
 type DeleteUserHandler struct {
-    repo      domain.UserRepository
-    txScope   transaction.TransactionScope
-    publisher events.Publisher  // EventBus injected here
+    repo    domain.UserRepository
+    txScope transaction.ScopeWithDomainEvent
 }
 
 func (h *DeleteUserHandler) Handle(ctx context.Context, cmd DeleteUserCommand) error {
-    return h.txScope.Execute(ctx, func(ctx context.Context) error {
+    userID, _ := domain.ParseUserID(cmd.UserID)
+
+    return h.txScope.ExecuteWithPublish(ctx, func(ctx context.Context) error {
         // 1. Load aggregate
         user, err := h.repo.FindByID(ctx, userID)
         if err != nil {
             return err
         }
 
-        // 2. Execute business logic (adds event internally)
-        if err := user.Delete(); err != nil {
+        // 2. Execute business logic (adds event to ctx collector)
+        if err := user.Delete(ctx); err != nil {
             return err
         }
 
         // 3. Persist aggregate
-        if err := h.repo.Save(ctx, user); err != nil {
-            return err
-        }
-
-        // 4. Publish events (handlers execute immediately within same transaction)
-        if err := h.publisher.Publish(ctx, user.PopDomainEvents()...); err != nil {
-            return err
-        }
-
-        return nil
+        return h.repo.Save(ctx, user)
+        // ScopeWithDomainEvent publishes events after this fn returns nil
     })
 }
 ```
@@ -272,24 +265,25 @@ type UserDeletedHandler struct {
 }
 
 func (h *UserDeletedHandler) Handle(ctx context.Context, event events.Event) error {
-    // ctx contains the transaction - repository operations join it
+    // ctx contains the transaction - repository operations join it automatically
     orders, _, err := h.orderRepo.FindByUserID(ctx, userID, 0, 1000)
     if err != nil {
-        return err  // Triggers rollback
+        return err  // Triggers rollback of the entire transaction
     }
 
     for _, order := range orders {
-        order.Cancel()
+        order.Cancel(ctx)         // Adds OrderCancelledEvent to ctx
         h.orderRepo.Save(ctx, order)  // Same transaction
     }
     return nil
+    // Events added by Cancel(ctx) are drained by the outer EventBus drain loop
 }
 ```
 
 Key points:
 
 - Use repository directly (not through command handlers)
-- Pass context through - it contains the transaction
+- Pass `ctx` through — it contains both the transaction and the event collector
 - Return errors to trigger rollback
 - **No external API calls or side effects**
 
@@ -298,7 +292,7 @@ Key points:
 For handlers with external side effects (email, Pub/Sub, etc.):
 
 ```go
-// This handler runs via EventBus AFTER transaction commit
+// This handler runs via EventBus (currently in-process but logically non-transactional)
 type OrderSubmittedHandler struct {
     logger *slog.Logger
 }
@@ -352,12 +346,13 @@ The migration requires:
 
 ## Summary
 
-| Component          | Responsibility                                    |
-| ------------------ | ------------------------------------------------- |
-| `AggregateRoot`    | Collect events during business operations         |
-| `TransactionScope` | Manage transaction lifecycle                      |
-| `TxFromContext`    | Enable repositories to join existing transactions |
-| `EventBus`         | Subscribe handlers and publish events synchronously |
+| Component                  | Responsibility                                       |
+| -------------------------- | ---------------------------------------------------- |
+| `events.Add(ctx, event)`   | Collect events during business operations            |
+| `transaction.Scope`        | Manage transaction lifecycle                         |
+| `ScopeWithDomainEvent`     | Initialize collector, execute fn, publish events     |
+| `TxFromContext`            | Enable repositories to join existing transactions    |
+| `EventBus`                 | Subscribe handlers and publish events synchronously  |
 
 This pattern achieves:
 

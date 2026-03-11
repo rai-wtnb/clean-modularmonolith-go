@@ -60,105 +60,104 @@ The alternative — exposing `CreateUser()`, `GetUser()`, `UpdateUser()` — wou
 
 ### 2. Transaction Scope — Deep Module by Design
 
-Transaction management is this project's most deliberate application of Ousterhout's Deep Module principle. The entire public interface is one method:
+Transaction management is this project's most deliberate application of Ousterhout's Deep Module principle. Two interfaces hide all the complexity:
 
 ```go
-// modules/shared/transaction/scope.go — The port
+// modules/shared/transaction/scope.go — Base port
 type Scope interface {
     Execute(ctx context.Context, fn func(ctx context.Context) error) error
 }
+
+// modules/shared/transaction/event_scope.go — For command handlers
+type ScopeWithDomainEvent interface {
+    ExecuteWithPublish(ctx context.Context, fn func(ctx context.Context) error) error
+}
 ```
 
-Behind this single method, the implementation absorbs substantial complexity that callers never see:
+Behind these simple interfaces, the implementation absorbs substantial complexity that callers never see:
 
 ```
-                    transaction.Scope
-                 ┌──────────────────────┐
-  Simple         │  Execute(ctx, fn)    │
-  Interface      └──────────┬───────────┘
-                            │
-  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┼ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
-                            │
-  Deep           ┌──────────▼───────────────────────────────┐
-  Implementation │  Begin / Commit / Rollback lifecycle     │
-                 │  Spanner retry on Aborted errors         │
-                 │  Transaction propagation via context      │
-                 │  Nested transaction prevention            │
-                 │  Read-your-writes consistency             │
-                 │  ReadOnly vs ReadWrite strategy           │
-                 └──────────────────────────────────────────┘
+               transaction.ScopeWithDomainEvent
+            ┌──────────────────────────────────┐
+  Simple    │  ExecuteWithPublish(ctx, fn)     │
+  Interface └──────────────┬───────────────────┘
+                           │
+  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┼─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+                           │
+  Deep      ┌──────────────▼──────────────────────────────┐
+  Impl      │  Initializes fresh event collector in ctx   │
+            │  Delegates to Scope.Execute (begin/commit)  │
+            │  Spanner retry on Aborted errors            │
+            │  Collects events from ctx after fn succeeds │
+            │  Publishes events via EventBus              │
+            └─────────────────────────────────────────────┘
 ```
 
-**Why this matters:** Command handlers are completely unaware of Spanner. They call `Execute`, pass a function, and get atomicity. The transaction is embedded in `ctx` — repositories extract it automatically, event handlers participate in it transparently.
+**Why this matters:** Command handlers are completely unaware of Spanner, retries, or event publishing. They just execute business logic:
 
 ```go
-// Command handler — knows nothing about Spanner, retries, or transaction propagation
-func (h *CreateUserHandler) Handle(ctx context.Context, cmd CreateUserCommand) (string, error) {
-    email, _ := domain.NewEmail(cmd.Email)  // Validate outside transaction
-    name, _ := domain.NewName(cmd.FirstName, cmd.LastName)
+// Command handler — knows nothing about Spanner, retries, or event publishing
+func (h *DeleteUserHandler) Handle(ctx context.Context, cmd DeleteUserCommand) error {
+    userID, _ := domain.ParseUserID(cmd.UserID)
 
-    return transaction.ExecuteWithResult(ctx, h.txScope, func(ctx context.Context) (string, error) {
-        h.repo.Exists(ctx, email)           // ← Reads within transaction (via context)
-        user := domain.NewUser(email, name)
-        h.repo.Save(ctx, user)              // ← Buffers write in transaction (via context)
-        h.publisher.Publish(ctx, ...)       // ← Event handlers join same transaction (via context)
-        return user.ID().String(), nil
+    return h.txScope.ExecuteWithPublish(ctx, func(ctx context.Context) error {
+        user, _ := h.repo.FindByID(ctx, userID)
+        user.Delete(ctx)             // ← Adds event to ctx collector
+        return h.repo.Save(ctx, user)
     })
-    // Transaction commits if nil, rolls back otherwise
+    // Events published automatically after successful fn; transaction commits
 }
 ```
 
 **The layered abstraction (Clean Architecture dependency rule):**
 
 ```
-  modules/shared/transaction/       ← Port (interface)
-  Command handlers depend on this     No infrastructure knowledge
+  modules/shared/transaction/         ← Port (interfaces)
+  Command handlers depend on this       No infrastructure knowledge
           │
           │ implements
           ▼
-  internal/platform/spanner/        ← Adapter (implementation)
-  ReadWriteTransactionScope           Spanner-specific lifecycle
-  ReadOnlyTransactionScope            Retry logic, context embedding
-          │
-          │ uses
-          ▼
-  context.go                        ← Invisible plumbing
-  withReadWriteTx(ctx, tx)            Embeds transaction in context
-  ReadTransactionFromContext(ctx)      Unifies RW/RO via ReadTransaction interface
+  internal/platform/spanner/          ← Adapter (implementation)
+  ReadWriteTransactionScope             Spanner-specific lifecycle
+  ReadOnlyTransactionScope              Retry logic, context embedding
 ```
 
-Repositories check `ReadWriteTxFromContext(ctx)` for writes and `ReadTransactionFromContext(ctx)` for reads. If a transaction exists in context, they participate. If not, they fall back to standalone operations. This means repositories work both inside and outside transactions — no dual codepath required.
+The transaction is embedded in `ctx` — repositories extract it automatically. This means repositories work both inside and outside transactions with no dual codepath.
 
 ### 3. Transactional Domain Events
 
-Events and state changes must be atomic. This implementation publishes events **within the same transaction**:
+Events and state changes must be atomic. `ScopeWithDomainEvent` ensures they always commit together:
 
 ```go
-return transaction.ExecuteWithResult(ctx, h.txScope, func(ctx context.Context) (string, error) {
-    user := domain.NewUser(email, name)
-    h.repo.Save(ctx, user)
-    h.publisher.Publish(ctx, user.PopDomainEvents()...)  // Handlers run immediately
-    return user.ID().String(), nil
+// In module.go — wire ScopeWithDomainEvent once
+txScope := transaction.NewScopeWithDomainEvent(cfg.TransactionScope, cfg.Publisher)
+
+// In command handler — just run business logic
+return h.txScope.ExecuteWithPublish(ctx, func(ctx context.Context) error {
+    user := domain.NewUser(ctx, email, name)  // Adds UserCreatedEvent to ctx
+    return h.repo.Save(ctx, user)
 })
+// ScopeWithDomainEvent publishes events after fn succeeds, before commit
 // If any handler fails → entire transaction rolls back
 // If commit fails → no events were "published" externally
 ```
 
 Event handlers receive the same `ctx` containing the active transaction. They can read and write within that transaction, ensuring cross-module consistency without distributed coordination.
 
-### 4. Aggregates Collect Their Own Events
+### 4. Aggregates Emit Their Own Events
 
-The aggregate knows which events should occur when business rules execute:
+The aggregate knows which events should occur when business rules execute. Events are added to the context-bound collector:
 
 ```go
-func (u *User) Delete() error {
+func (u *User) Delete(ctx context.Context) error {
     u.status = StatusDeleted
-    u.AddDomainEvent(NewUserDeletedEvent(u.id))  // Self-contained
+    u.updatedAt = time.Now().UTC()
+    events.Add(ctx, newUserDeletedEvent(u.id))  // Self-contained
     return nil
 }
 ```
 
-This keeps business logic cohesive — the aggregate, not the application service, decides what events to emit.
+This keeps business logic cohesive — the aggregate, not the application service, decides what events to emit. `ScopeWithDomainEvent` drains and publishes whatever was added to `ctx` after the transaction body succeeds.
 
 ### 5. Event Contracts as Public API
 
