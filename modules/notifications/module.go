@@ -20,7 +20,8 @@ func New(cfg Config) *Module {
 	logger := cfg.Logger.With("module", "notifications")
 
 	// Initialize event handlers
-	orderSubmittedHandler := eventhandlers.NewOrderSubmittedHandler(logger)
+	sender := eventhandlers.NewNotificationSender(logger)
+	orderSubmittedHandler := eventhandlers.NewOrderSubmittedHandler(sender)
 
 	// Subscribe to events
 	if err := cfg.EventSubscriber.Subscribe(orderSubmittedHandler.EventType(), orderSubmittedHandler); err != nil {

@@ -3,7 +3,6 @@ package eventhandlers
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	orderevents "github.com/rai/clean-modularmonolith-go/modules/orders/domain/events"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
@@ -12,12 +11,11 @@ import (
 // OrderSubmittedHandler handles OrderSubmitted events by sending notifications.
 // Performs external side effects; must not run within a database transaction.
 type OrderSubmittedHandler struct {
-	events.IdempotentBase
-	logger *slog.Logger
+	sender *NotificationSender
 }
 
-func NewOrderSubmittedHandler(logger *slog.Logger) *OrderSubmittedHandler {
-	return &OrderSubmittedHandler{logger: logger}
+func NewOrderSubmittedHandler(sender *NotificationSender) *OrderSubmittedHandler {
+	return &OrderSubmittedHandler{sender: sender}
 }
 
 func (h *OrderSubmittedHandler) HandlerName() string { return "OrderSubmittedHandler" }
@@ -31,10 +29,5 @@ func (h *OrderSubmittedHandler) Handle(ctx context.Context, event events.Event) 
 	if !ok {
 		return fmt.Errorf("unexpected event type: %T", event)
 	}
-
-	onceFn := func() error {
-		h.logger.Info("sending email to user", slog.String("order_id", e.OrderID), slog.String("action", "order_confirmation"))
-		return nil
-	}
-	return h.Once(fmt.Sprintf("send-confirmation:%s", e.OrderID), onceFn)
+	return h.sender.SendOrderConfirmation(e.OrderID)
 }

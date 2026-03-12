@@ -10,30 +10,25 @@ import (
 // bounding memory growth in long-running processes.
 const defaultOnceTTL = 5 * time.Minute
 
-// IdempotentBase is an embeddable struct for handlers that perform external
-// side effects (email, HTTP calls, external APIs). Embed it and wrap each
-// external call with Once(key, fn), where key is derived from the actual call
-// parameters.
+// IdempotentBase is an embeddable struct for external-call clients (email,
+// HTTP, external APIs). Embed it in the client/sender, not in the
+// DomainEventHandler itself, so that transactional DB operations within the
+// same handler are unaffected and still re-run on Spanner retries.
 //
-// Use this when: the handler makes out-of-transaction calls that cannot be
-// rolled back. Same params → same key → skip. Different params (business
+// Wrap each outbound call with Once(key, fn) where key captures the call
+// parameters. Same params → same key → skip. Different params (business
 // logic changed between retries) → different key → execute.
-//
-// Do NOT use this for handlers that only perform transactional DB writes.
-// Those must re-run on retry (previous writes were rolled back) and rely on
-// DB-level idempotency instead.
 //
 // Example:
 //
-//	type MyHandler struct {
+//	type EmailSender struct {
 //	    events.IdempotentBase
 //	    // ...
 //	}
 //
-//	func (h *MyHandler) Handle(ctx context.Context, event events.Event) error {
-//	    e := event.(contracts.SomeEvent)
-//	    return h.Once(fmt.Sprintf("my-operation:%s", e.SomeID), func() error {
-//	        return callExternalService(e.SomeID)
+//	func (s *EmailSender) SendConfirmation(orderID string) error {
+//	    return s.Once("send-confirmation:"+orderID, func() error {
+//	        return s.client.Send(orderID)
 //	    })
 //	}
 //
