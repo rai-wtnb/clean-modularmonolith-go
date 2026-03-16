@@ -61,10 +61,9 @@ func (e BaseEvent) EventID() string       { return e.id }
 func (e BaseEvent) EventType() EventType  { return e.eventType }
 func (e BaseEvent) OccurredAt() time.Time { return e.timestamp }
 
-// Publisher publishes domain events collected in the context.
-// Implementations extract events from ctx via Collect and dispatch them.
+// Publisher dispatches domain events to registered handlers.
 type Publisher interface {
-	Publish(ctx context.Context) error
+	Publish(ctx context.Context, events []Event) error
 }
 
 // Handler handles a specific type of domain event.

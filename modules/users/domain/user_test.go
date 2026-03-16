@@ -9,34 +9,28 @@ import (
 )
 
 func TestNewUser(t *testing.T) {
-	ctx := events.NewContext(context.Background())
+	fn := func(ctx context.Context) error {
+		user := createTestUser(t, ctx)
 
-	email, err := domain.NewEmail("test@example.com")
+		if user.ID().IsZero() {
+			t.Error("expected user to have an ID")
+		}
+		if user.Email().String() != "test@example.com" {
+			t.Errorf("expected email 'test@example.com', got '%s'", user.Email().String())
+		}
+		if user.Name().FullName() != "John Doe" {
+			t.Errorf("expected name 'John Doe', got '%s'", user.Name().FullName())
+		}
+		if user.Status() != domain.StatusActive {
+			t.Errorf("expected status 'active', got '%s'", user.Status())
+		}
+		return nil
+	}
+	collected, err := events.CaptureEvents(context.Background(), fn)
 	if err != nil {
-		t.Fatalf("failed to create email: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 
-	name, err := domain.NewName("John", "Doe")
-	if err != nil {
-		t.Fatalf("failed to create name: %v", err)
-	}
-
-	user := domain.NewUser(ctx, email, name)
-
-	if user.ID().IsZero() {
-		t.Error("expected user to have an ID")
-	}
-	if user.Email().String() != "test@example.com" {
-		t.Errorf("expected email 'test@example.com', got '%s'", user.Email().String())
-	}
-	if user.Name().FullName() != "John Doe" {
-		t.Errorf("expected name 'John Doe', got '%s'", user.Name().FullName())
-	}
-	if user.Status() != domain.StatusActive {
-		t.Errorf("expected status 'active', got '%s'", user.Status())
-	}
-
-	collected := events.Collect(ctx)
 	if len(collected) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(collected))
 	}
@@ -46,48 +40,63 @@ func TestNewUser(t *testing.T) {
 }
 
 func TestUser_UpdateProfile(t *testing.T) {
-	ctx := events.NewContext(context.Background())
-	user := createTestUser(t, ctx)
+	_, err := events.CaptureEvents(context.Background(), func(ctx context.Context) error {
+		user := createTestUser(t, ctx)
 
-	newName, err := domain.NewName("Jane", "Smith")
+		newName, err := domain.NewName("Jane", "Smith")
+		if err != nil {
+			t.Fatalf("failed to create name: %v", err)
+		}
+
+		err = user.UpdateProfile(ctx, newName)
+		if err != nil {
+			t.Fatalf("failed to update profile: %v", err)
+		}
+
+		if user.Name().FullName() != "Jane Smith" {
+			t.Errorf("expected name 'Jane Smith', got '%s'", user.Name().FullName())
+		}
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("failed to create name: %v", err)
-	}
-
-	err = user.UpdateProfile(ctx, newName)
-	if err != nil {
-		t.Fatalf("failed to update profile: %v", err)
-	}
-
-	if user.Name().FullName() != "Jane Smith" {
-		t.Errorf("expected name 'Jane Smith', got '%s'", user.Name().FullName())
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestUser_Delete(t *testing.T) {
-	ctx := events.NewContext(context.Background())
-	user := createTestUser(t, ctx)
+	_, err := events.CaptureEvents(context.Background(), func(ctx context.Context) error {
+		user := createTestUser(t, ctx)
 
-	err := user.Delete(ctx)
+		err := user.Delete(ctx)
+		if err != nil {
+			t.Fatalf("failed to delete user: %v", err)
+		}
+
+		if user.Status() != domain.StatusDeleted {
+			t.Errorf("expected status 'deleted', got '%s'", user.Status())
+		}
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("failed to delete user: %v", err)
-	}
-
-	if user.Status() != domain.StatusDeleted {
-		t.Errorf("expected status 'deleted', got '%s'", user.Status())
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestUser_UpdateProfile_Deleted(t *testing.T) {
-	ctx := events.NewContext(context.Background())
-	user := createTestUser(t, ctx)
-	user.Delete(ctx)
+	_, err := events.CaptureEvents(context.Background(), func(ctx context.Context) error {
+		user := createTestUser(t, ctx)
+		user.Delete(ctx)
 
-	newName, _ := domain.NewName("Jane", "Smith")
-	err := user.UpdateProfile(ctx, newName)
+		newName, _ := domain.NewName("Jane", "Smith")
+		err := user.UpdateProfile(ctx, newName)
 
-	if err != domain.ErrUserDeleted {
-		t.Errorf("expected ErrUserDeleted, got %v", err)
+		if err != domain.ErrUserDeleted {
+			t.Errorf("expected ErrUserDeleted, got %v", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

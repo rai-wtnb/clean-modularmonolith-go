@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction/txtest"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/events/eventstest"
 	userevents "github.com/rai/clean-modularmonolith-go/modules/users/domain/events"
 	"github.com/rai/clean-modularmonolith-go/modules/users/application/commands"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
@@ -25,7 +25,7 @@ func TestDeleteUserHandler_Handle_Success(t *testing.T) {
 		repo.EXPECT().Save(gomock.Any(), deletedUser(userID)).Return(nil),
 	)
 
-	scope, capture := txtest.NewScopeCaptureEvents(ctrl)
+	scope, capture := eventstest.NewScopeCaptureEvents(ctrl)
 	handler := commands.NewDeleteUserHandler(repo, scope)
 
 	err := handler.Handle(t.Context(), commands.DeleteUserCommand{UserID: userID.String()})
@@ -67,7 +67,7 @@ func TestDeleteUserHandler_Handle_UserNotFound(t *testing.T) {
 	repo := domainmocks.NewMockUserRepository(ctrl)
 	repo.EXPECT().FindByID(gomock.Any(), userID).Return(nil, errNotFound)
 
-	scope, capture := txtest.NewScopeCaptureEvents(ctrl)
+	scope, capture := eventstest.NewScopeCaptureEvents(ctrl)
 	handler := commands.NewDeleteUserHandler(repo, scope)
 
 	err := handler.Handle(t.Context(), commands.DeleteUserCommand{UserID: userID.String()})
@@ -96,7 +96,7 @@ func TestDeleteUserHandler_Handle_SaveError(t *testing.T) {
 		repo.EXPECT().Save(gomock.Any(), deletedUser(userID)).Return(errSave),
 	)
 
-	scope, capture := txtest.NewScopeCaptureEvents(ctrl)
+	scope, capture := eventstest.NewScopeCaptureEvents(ctrl)
 	handler := commands.NewDeleteUserHandler(repo, scope)
 
 	err := handler.Handle(t.Context(), commands.DeleteUserCommand{UserID: userID.String()})
@@ -118,7 +118,7 @@ func TestDeleteUserHandler_Handle_TransactionError(t *testing.T) {
 	userID := domain.NewUserID()
 	errTx := errors.New("transaction failed")
 
-	handler := commands.NewDeleteUserHandler(nil, txtest.NewScopeError(ctrl, errTx))
+	handler := commands.NewDeleteUserHandler(nil, eventstest.NewScopeError(ctrl, errTx))
 
 	err := handler.Handle(t.Context(), commands.DeleteUserCommand{UserID: userID.String()})
 

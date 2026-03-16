@@ -1,5 +1,5 @@
-// Package txtest provides test helpers for transaction.ScopeWithDomainEvent.
-package txtest
+// Package eventstest provides test helpers for transaction.ScopeWithDomainEvent.
+package eventstest
 
 import (
 	"context"
@@ -19,22 +19,22 @@ type Capture struct {
 // hold the domain events emitted during execution. Use this in all command handler tests
 // — it enforces that event emission is always observable.
 //
-//	scope, capture := txtest.NewScopeCaptureEvents(ctrl)
+//	scope, capture := eventstest.NewScopeCaptureEvents(ctrl)
 //	handler.Handle(ctx, cmd)
 //	// assert on capture.Events
 func NewScopeCaptureEvents(ctrl *gomock.Controller) (transaction.ScopeWithDomainEvent, *Capture) {
 	capture := &Capture{}
 	m := txmocks.NewMockScopeWithDomainEvent(ctrl)
-	m.EXPECT().ExecuteWithPublish(gomock.Any(), gomock.Any()).DoAndReturn(
-		func(ctx context.Context, fn func(ctx context.Context) error) error {
-			ctx = events.NewContext(ctx)
-			if err := fn(ctx); err != nil {
-				return err
-			}
-			capture.Events = events.Collect(ctx)
-			return nil
-		},
-	)
+
+	fn := func(ctx context.Context, fn func(ctx context.Context) error) error {
+		evts, err := events.CaptureEvents(ctx, fn)
+		if err != nil {
+			return err
+		}
+		capture.Events = evts
+		return nil
+	}
+	m.EXPECT().ExecuteWithPublish(gomock.Any(), gomock.Any()).DoAndReturn(fn)
 	return m, capture
 }
 

@@ -43,7 +43,7 @@ type module struct {
 func New(cfg Config) Module {
 	// Wrap the transaction scope with ScopeWithDomainEvent that automatically
 	// collects domain events from context and publishes them after success.
-	txScope := transaction.NewScopeWithDomainEvent(cfg.ReadWriteTransactionScope, cfg.Publisher)
+	txScope := events.NewScopeWithDomainEvent(cfg.ReadWriteTransactionScope, cfg.Publisher)
 
 	// Wire up command handlers (no publisher needed — ScopeWithDomainEvent handles it)
 	createUserHandler := commands.NewCreateUserHandler(cfg.Repository, txScope)
