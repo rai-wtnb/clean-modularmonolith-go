@@ -1,4 +1,4 @@
-.PHONY: workspace build run test test-coverage lint clean tidy deps-check deps-update sync vulncheck deps-graph deps-svg help
+.PHONY: workspace build run test test-coverage lint check clean tidy deps-check deps-update sync vulncheck deps-graph deps-svg help
 
 # Module paths
 MODULES := cmd/server modules/shared modules/users modules/orders modules/notifications internal/platform
@@ -42,6 +42,20 @@ lint:
 		echo "Linting $$mod..."; \
 		golangci-lint run ./$$mod/...; \
 	done
+
+## check: Verify persistence packages use Spanner helpers (go/analysis static analysis)
+check:
+	@cd tools/spannercheck && GOWORK=off go build -o ../../bin/spannercheck ./cmd/spannercheck
+	@FAILED=0; \
+	for mod in $(MODULES); do \
+		if ! ./bin/spannercheck ./$$mod/... 2>&1; then \
+			FAILED=1; \
+		fi; \
+	done; \
+	if [ $$FAILED -eq 1 ]; then \
+		exit 1; \
+	fi
+	@echo "OK: All persistence packages use Spanner helpers."
 
 ## tidy: Run go mod tidy on all modules
 tidy:

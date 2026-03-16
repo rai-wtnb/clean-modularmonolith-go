@@ -22,226 +22,196 @@ func NewSpannerRepository(client *spanner.Client) *SpannerRepository {
 	return &SpannerRepository{client: client}
 }
 
-// Save persists an order.
+// Save persists an order using DML for read-your-writes consistency.
 // It uses an existing transaction if available, otherwise creates a new one.
+// All statements are executed in a single BatchUpdate RPC.
 func (r *SpannerRepository) Save(ctx context.Context, order *domain.Order) error {
-	if txn, ok := platformspanner.ReadWriteTxFromContext(ctx); ok {
-		return r.saveWithTx(txn, order)
+	orderID := order.ID().String()
+
+	stmts := make([]spanner.Statement, 0, 2+len(order.Items()))
+
+	// Delete existing items first
+	stmts = append(stmts, spanner.Statement{
+		SQL:    `DELETE FROM OrderItems WHERE OrderID = @orderID`,
+		Params: map[string]interface{}{"orderID": orderID},
+	})
+
+	// Upsert order
+	stmts = append(stmts, spanner.Statement{
+		SQL: `INSERT OR UPDATE INTO Orders (OrderID, UserID, Status, TotalAmount, TotalCurrency, CreatedAt, UpdatedAt)
+		      VALUES (@orderID, @userID, @status, @totalAmount, @totalCurrency, @createdAt, @updatedAt)`,
+		Params: map[string]interface{}{
+			"orderID":       orderID,
+			"userID":        order.UserRef().String(),
+			"status":        order.Status().String(),
+			"totalAmount":   order.Total().Amount(),
+			"totalCurrency": order.Total().Currency(),
+			"createdAt":     order.CreatedAt(),
+			"updatedAt":     order.UpdatedAt(),
+		},
+	})
+
+	// Insert items
+	for i, item := range order.Items() {
+		stmts = append(stmts, spanner.Statement{
+			SQL: `INSERT OR UPDATE INTO OrderItems (OrderID, ItemIndex, ProductID, ProductName, Quantity, UnitAmount, Currency)
+			      VALUES (@orderID, @itemIndex, @productID, @productName, @quantity, @unitAmount, @currency)`,
+			Params: map[string]interface{}{
+				"orderID":     orderID,
+				"itemIndex":   int64(i),
+				"productID":   item.ProductID,
+				"productName": item.ProductName,
+				"quantity":    int64(item.Quantity),
+				"unitAmount":  item.UnitPrice.Amount(),
+				"currency":    item.UnitPrice.Currency(),
+			},
+		})
 	}
 
-	_, err := r.client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
-		return r.saveWithTx(txn, order)
-	})
-	if err != nil {
+	if err := platformspanner.Write(ctx, r.client, stmts...); err != nil {
 		return fmt.Errorf("failed to save order: %w", err)
 	}
 	return nil
 }
 
-func (r *SpannerRepository) saveWithTx(tx *spanner.ReadWriteTransaction, order *domain.Order) error {
-	orderID := order.ID().String()
-
-	// Delete existing items first (handles item removal on update)
-	if err := tx.BufferWrite([]*spanner.Mutation{
-		spanner.Delete("OrderItems", spanner.KeyRange{
-			Start: spanner.Key{orderID},
-			End:   spanner.Key{orderID},
-			Kind:  spanner.ClosedClosed,
-		}),
-	}); err != nil {
-		return fmt.Errorf("failed to delete existing items: %w", err)
-	}
-
-	// Build mutations for order and items
-	mutations := []*spanner.Mutation{
-		spanner.InsertOrUpdate("Orders",
-			[]string{"OrderID", "UserID", "Status", "TotalAmount", "TotalCurrency", "CreatedAt", "UpdatedAt"},
-			[]interface{}{
-				orderID,
-				order.UserRef().String(),
-				order.Status().String(),
-				order.Total().Amount(),
-				order.Total().Currency(),
-				order.CreatedAt(),
-				order.UpdatedAt(),
-			},
-		),
-	}
-
-	for i, item := range order.Items() {
-		mutations = append(mutations, spanner.InsertOrUpdate("OrderItems",
-			[]string{"OrderID", "ItemIndex", "ProductID", "ProductName", "Quantity", "UnitAmount", "Currency"},
-			[]interface{}{
-				orderID,
-				int64(i),
-				item.ProductID,
-				item.ProductName,
-				int64(item.Quantity),
-				item.UnitPrice.Amount(),
-				item.UnitPrice.Currency(),
-			},
-		))
-	}
-
-	return tx.BufferWrite(mutations)
-}
-
 func (r *SpannerRepository) FindByID(ctx context.Context, id domain.OrderID) (*domain.Order, error) {
-	reader, ok := platformspanner.ReadTransactionFromContext(ctx)
-	if !ok {
-		// Reads from Orders + OrderItems require ReadOnlyTransaction
-		// for point-in-time consistency. Single() is only for one read.
-		roTx := r.client.ReadOnlyTransaction()
-		defer roTx.Close()
-		reader = roTx
-	}
-
-	row, err := reader.ReadRow(ctx, "Orders",
-		spanner.Key{id.String()},
-		[]string{"OrderID", "UserID", "Status", "TotalAmount", "TotalCurrency", "CreatedAt", "UpdatedAt"},
-	)
-	if err != nil {
-		if spanner.ErrCode(err) == codes.NotFound {
-			return nil, domain.ErrOrderNotFound
-		}
-		return nil, fmt.Errorf("failed to read order: %w", err)
-	}
-
-	var orderID, userID, status, totalCurrency string
-	var totalAmount int64
-	var createdAt, updatedAt time.Time
-
-	if err := row.Columns(&orderID, &userID, &status, &totalAmount, &totalCurrency, &createdAt, &updatedAt); err != nil {
-		return nil, fmt.Errorf("failed to scan order: %w", err)
-	}
-
-	items, err := r.readOrderItems(ctx, reader, orderID)
-	if err != nil {
-		return nil, err
-	}
-
-	parsedOrderID, err := domain.ParseOrderID(orderID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse order id: %w", err)
-	}
-
-	userRef := domain.MustNewUserRef(userID)
-
-	total := domain.MustNewMoney(totalAmount, totalCurrency)
-
-	return domain.Reconstitute(
-		parsedOrderID,
-		userRef,
-		items,
-		domain.Status(status),
-		total,
-		createdAt,
-		updatedAt,
-	), nil
-}
-
-func (r *SpannerRepository) FindByUserRef(ctx context.Context, userRef domain.UserRef, offset, limit int) ([]*domain.Order, int, error) {
-	reader, ok := platformspanner.ReadTransactionFromContext(ctx)
-	if !ok {
-		// Multiple queries (COUNT + SELECT + items) require ReadOnlyTransaction
-		// for point-in-time consistency. Single() is only for one read.
-		roTx := r.client.ReadOnlyTransaction()
-		defer roTx.Close()
-		reader = roTx
-	}
-
-	// Get total count
-	countStmt := spanner.Statement{
-		SQL:    `SELECT COUNT(*) FROM Orders WHERE UserID = @userID`,
-		Params: map[string]interface{}{"userID": userRef.String()},
-	}
-
-	countIter := reader.Query(ctx, countStmt)
-	defer countIter.Stop()
-
-	var total int64
-	countRow, err := countIter.Next()
-	if err != nil && err != iterator.Done {
-		return nil, 0, fmt.Errorf("failed to count orders: %w", err)
-	}
-	if countRow != nil {
-		if err := countRow.Columns(&total); err != nil {
-			return nil, 0, fmt.Errorf("failed to scan count: %w", err)
-		}
-	}
-
-	// Query orders with pagination
-	stmt := spanner.Statement{
-		SQL: `SELECT OrderID, UserID, Status, TotalAmount, TotalCurrency, CreatedAt, UpdatedAt
-		      FROM Orders@{FORCE_INDEX=OrdersByUserID}
-		      WHERE UserID = @userID
-		      ORDER BY CreatedAt DESC
-		      LIMIT @limit OFFSET @offset`,
-		Params: map[string]interface{}{
-			"userID": userRef.String(),
-			"limit":  int64(limit),
-			"offset": int64(offset),
-		},
-	}
-
-	iter := reader.Query(ctx, stmt)
-	defer iter.Stop()
-
-	var orders []*domain.Order
-	for {
-		row, err := iter.Next()
-		if err == iterator.Done {
-			break
-		}
+	return platformspanner.ReadConsistent(ctx, r.client, func(ctx context.Context, reader platformspanner.ReadTransaction) (*domain.Order, error) {
+		row, err := reader.ReadRow(ctx, "Orders",
+			spanner.Key{id.String()},
+			[]string{"OrderID", "UserID", "Status", "TotalAmount", "TotalCurrency", "CreatedAt", "UpdatedAt"},
+		)
 		if err != nil {
-			return nil, 0, fmt.Errorf("failed to query orders: %w", err)
+			if spanner.ErrCode(err) == codes.NotFound {
+				return nil, domain.ErrOrderNotFound
+			}
+			return nil, fmt.Errorf("failed to read order: %w", err)
 		}
 
-		var orderID, userIDStr, status, totalCurrency string
+		var orderID, userID, status, totalCurrency string
 		var totalAmount int64
 		var createdAt, updatedAt time.Time
 
-		if err := row.Columns(&orderID, &userIDStr, &status, &totalAmount, &totalCurrency, &createdAt, &updatedAt); err != nil {
-			return nil, 0, fmt.Errorf("failed to scan order: %w", err)
+		if err := row.Columns(&orderID, &userID, &status, &totalAmount, &totalCurrency, &createdAt, &updatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan order: %w", err)
 		}
 
 		items, err := r.readOrderItems(ctx, reader, orderID)
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 
-		parsedOrderID, _ := domain.ParseOrderID(orderID)
-		userRefFromDB := domain.MustNewUserRef(userIDStr)
-		orderTotal := domain.MustNewMoney(totalAmount, totalCurrency)
+		parsedOrderID, err := domain.ParseOrderID(orderID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse order id: %w", err)
+		}
 
-		orders = append(orders, domain.Reconstitute(
+		userRef := domain.MustNewUserRef(userID)
+		total := domain.MustNewMoney(totalAmount, totalCurrency)
+
+		return domain.Reconstitute(
 			parsedOrderID,
-			userRefFromDB,
+			userRef,
 			items,
 			domain.Status(status),
-			orderTotal,
+			total,
 			createdAt,
 			updatedAt,
-		))
-	}
+		), nil
+	})
+}
 
-	return orders, int(total), nil
+func (r *SpannerRepository) FindByUserRef(ctx context.Context, userRef domain.UserRef, offset, limit int) ([]*domain.Order, int, error) {
+	var total int
+	orders, err := platformspanner.ReadConsistent(ctx, r.client, func(ctx context.Context, reader platformspanner.ReadTransaction) ([]*domain.Order, error) {
+		// Get total count
+		countStmt := spanner.Statement{
+			SQL:    `SELECT COUNT(*) FROM Orders WHERE UserID = @userID`,
+			Params: map[string]interface{}{"userID": userRef.String()},
+		}
+
+		countIter := reader.Query(ctx, countStmt)
+		defer countIter.Stop()
+
+		var totalCount int64
+		countRow, err := countIter.Next()
+		if err != nil && err != iterator.Done {
+			return nil, fmt.Errorf("failed to count orders: %w", err)
+		}
+		if countRow != nil {
+			if err := countRow.Columns(&totalCount); err != nil {
+				return nil, fmt.Errorf("failed to scan count: %w", err)
+			}
+		}
+		total = int(totalCount)
+
+		// Query orders with pagination
+		stmt := spanner.Statement{
+			SQL: `SELECT OrderID, UserID, Status, TotalAmount, TotalCurrency, CreatedAt, UpdatedAt
+			      FROM Orders@{FORCE_INDEX=OrdersByUserID}
+			      WHERE UserID = @userID
+			      ORDER BY CreatedAt DESC
+			      LIMIT @limit OFFSET @offset`,
+			Params: map[string]interface{}{
+				"userID": userRef.String(),
+				"limit":  int64(limit),
+				"offset": int64(offset),
+			},
+		}
+
+		iter := reader.Query(ctx, stmt)
+		defer iter.Stop()
+
+		var orders []*domain.Order
+		for {
+			row, err := iter.Next()
+			if err == iterator.Done {
+				break
+			}
+			if err != nil {
+				return nil, fmt.Errorf("failed to query orders: %w", err)
+			}
+
+			var orderID, userIDStr, status, totalCurrency string
+			var totalAmount int64
+			var createdAt, updatedAt time.Time
+
+			if err := row.Columns(&orderID, &userIDStr, &status, &totalAmount, &totalCurrency, &createdAt, &updatedAt); err != nil {
+				return nil, fmt.Errorf("failed to scan order: %w", err)
+			}
+
+			items, err := r.readOrderItems(ctx, reader, orderID)
+			if err != nil {
+				return nil, err
+			}
+
+			parsedOrderID, _ := domain.ParseOrderID(orderID)
+			userRefFromDB := domain.MustNewUserRef(userIDStr)
+			orderTotal := domain.MustNewMoney(totalAmount, totalCurrency)
+
+			orders = append(orders, domain.Reconstitute(
+				parsedOrderID,
+				userRefFromDB,
+				items,
+				domain.Status(status),
+				orderTotal,
+				createdAt,
+				updatedAt,
+			))
+		}
+
+		return orders, nil
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	return orders, total, nil
 }
 
 func (r *SpannerRepository) Delete(ctx context.Context, id domain.OrderID) error {
-	mutations := []*spanner.Mutation{
-		// ON DELETE CASCADE handles OrderItems automatically
-		spanner.Delete("Orders", spanner.Key{id.String()}),
-	}
-
-	// Use existing transaction if available
-	if txn, ok := platformspanner.ReadWriteTxFromContext(ctx); ok {
-		return txn.BufferWrite(mutations)
-	}
-
-	// Fallback: standalone mutation (backward compatible)
-	_, err := r.client.Apply(ctx, mutations)
-	if err != nil {
+	if err := platformspanner.Write(ctx, r.client, spanner.Statement{
+		SQL:    `DELETE FROM Orders WHERE OrderID = @orderID`,
+		Params: map[string]interface{}{"orderID": id.String()},
+	}); err != nil {
 		return fmt.Errorf("failed to delete order: %w", err)
 	}
 	return nil

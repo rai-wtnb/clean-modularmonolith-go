@@ -28,166 +28,150 @@ func NewSpannerRepository(client *spanner.Client) *SpannerRepository {
 var _ domain.UserRepository = (*SpannerRepository)(nil)
 
 func (r *SpannerRepository) Save(ctx context.Context, user *domain.User) error {
-	mutations := []*spanner.Mutation{
-		spanner.InsertOrUpdate("Users",
-			[]string{"UserID", "Email", "FirstName", "LastName", "Status", "CreatedAt", "UpdatedAt"},
-			[]interface{}{
-				user.ID().String(),
-				user.Email().String(),
-				user.Name().FirstName(),
-				user.Name().LastName(),
-				user.Status().String(),
-				user.CreatedAt(),
-				user.UpdatedAt(),
-			},
-		),
+	stmt := spanner.Statement{
+		SQL: `INSERT OR UPDATE INTO Users (UserID, Email, FirstName, LastName, Status, CreatedAt, UpdatedAt)
+		      VALUES (@userID, @email, @firstName, @lastName, @status, @createdAt, @updatedAt)`,
+		Params: map[string]interface{}{
+			"userID":    user.ID().String(),
+			"email":     user.Email().String(),
+			"firstName": user.Name().FirstName(),
+			"lastName":  user.Name().LastName(),
+			"status":    user.Status().String(),
+			"createdAt": user.CreatedAt(),
+			"updatedAt": user.UpdatedAt(),
+		},
 	}
 
-	// Use existing transaction if available
-	if txn, ok := platformspanner.ReadWriteTxFromContext(ctx); ok {
-		return txn.BufferWrite(mutations)
-	}
-
-	// Fallback: standalone mutation (backward compatible)
-	_, err := r.client.Apply(ctx, mutations)
-	if err != nil {
+	if err := platformspanner.Write(ctx, r.client, stmt); err != nil {
 		return fmt.Errorf("failed to save user: %w", err)
 	}
 	return nil
 }
 
 func (r *SpannerRepository) FindByID(ctx context.Context, id domain.UserID) (*domain.User, error) {
-	rtx, ok := platformspanner.ReadTransactionFromContext(ctx)
-	if !ok {
-		rtx = r.client.Single()
-	}
-
-	row, err := rtx.ReadRow(ctx, "Users",
-		spanner.Key{id.String()},
-		[]string{"UserID", "Email", "FirstName", "LastName", "Status", "CreatedAt", "UpdatedAt"},
-	)
-	if err != nil {
-		if spanner.ErrCode(err) == codes.NotFound {
-			return nil, domain.ErrUserNotFound
+	return platformspanner.Read(ctx, r.client, func(ctx context.Context, rtx platformspanner.ReadTransaction) (*domain.User, error) {
+		row, err := rtx.ReadRow(ctx, "Users",
+			spanner.Key{id.String()},
+			[]string{"UserID", "Email", "FirstName", "LastName", "Status", "CreatedAt", "UpdatedAt"},
+		)
+		if err != nil {
+			if spanner.ErrCode(err) == codes.NotFound {
+				return nil, domain.ErrUserNotFound
+			}
+			return nil, fmt.Errorf("failed to read user: %w", err)
 		}
-		return nil, fmt.Errorf("failed to read user: %w", err)
-	}
 
-	return r.scanUser(row)
+		return r.scanUser(row)
+	})
 }
 
 func (r *SpannerRepository) FindByEmail(ctx context.Context, email domain.Email) (*domain.User, error) {
-	rtx, ok := platformspanner.ReadTransactionFromContext(ctx)
-	if !ok {
-		rtx = r.client.Single()
-	}
+	return platformspanner.Read(ctx, r.client, func(ctx context.Context, rtx platformspanner.ReadTransaction) (*domain.User, error) {
+		stmt := spanner.Statement{
+			SQL: `SELECT UserID, Email, FirstName, LastName, Status, CreatedAt, UpdatedAt
+			      FROM Users@{FORCE_INDEX=UsersByEmail}
+			      WHERE Email = @email
+			      LIMIT 1`,
+			Params: map[string]interface{}{"email": email.String()},
+		}
 
-	stmt := spanner.Statement{
-		SQL: `SELECT UserID, Email, FirstName, LastName, Status, CreatedAt, UpdatedAt
-		      FROM Users@{FORCE_INDEX=UsersByEmail}
-		      WHERE Email = @email
-		      LIMIT 1`,
-		Params: map[string]interface{}{"email": email.String()},
-	}
+		iter := rtx.Query(ctx, stmt)
+		defer iter.Stop()
 
-	iter := rtx.Query(ctx, stmt)
-	defer iter.Stop()
+		row, err := iter.Next()
+		if err == iterator.Done {
+			return nil, domain.ErrUserNotFound
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to query user by email: %w", err)
+		}
 
-	row, err := iter.Next()
-	if err == iterator.Done {
-		return nil, domain.ErrUserNotFound
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to query user by email: %w", err)
-	}
-
-	return r.scanUser(row)
+		return r.scanUser(row)
+	})
 }
 
 func (r *SpannerRepository) Exists(ctx context.Context, email domain.Email) (bool, error) {
-	rtx, ok := platformspanner.ReadTransactionFromContext(ctx)
-	if !ok {
-		rtx = r.client.Single()
-	}
+	return platformspanner.Read(ctx, r.client, func(ctx context.Context, rtx platformspanner.ReadTransaction) (bool, error) {
+		stmt := spanner.Statement{
+			SQL:    `SELECT 1 FROM Users@{FORCE_INDEX=UsersByEmail} WHERE Email = @email LIMIT 1`,
+			Params: map[string]interface{}{"email": email.String()},
+		}
 
-	stmt := spanner.Statement{
-		SQL:    `SELECT 1 FROM Users@{FORCE_INDEX=UsersByEmail} WHERE Email = @email LIMIT 1`,
-		Params: map[string]interface{}{"email": email.String()},
-	}
+		iter := rtx.Query(ctx, stmt)
+		defer iter.Stop()
 
-	iter := rtx.Query(ctx, stmt)
-	defer iter.Stop()
-
-	_, err := iter.Next()
-	if err == iterator.Done {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("failed to check user existence: %w", err)
-	}
-	return true, nil
+		_, err := iter.Next()
+		if err == iterator.Done {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("failed to check user existence: %w", err)
+		}
+		return true, nil
+	})
 }
 
 func (r *SpannerRepository) FindAll(ctx context.Context, offset, limit int) ([]*domain.User, int, error) {
-	rtx, ok := platformspanner.ReadTransactionFromContext(ctx)
-	if !ok {
-		roTx := r.client.ReadOnlyTransaction()
-		defer roTx.Close()
-		rtx = roTx
-	}
-
-	// Get total count
-	countStmt := spanner.Statement{
-		SQL: `SELECT COUNT(*) FROM Users WHERE Status != 'deleted'`,
-	}
-	countIter := rtx.Query(ctx, countStmt)
-	defer countIter.Stop()
-
-	var total int64
-	countRow, err := countIter.Next()
-	if err != nil && err != iterator.Done {
-		return nil, 0, fmt.Errorf("failed to count users: %w", err)
-	}
-	if countRow != nil {
-		if err := countRow.Columns(&total); err != nil {
-			return nil, 0, fmt.Errorf("failed to scan count: %w", err)
+	var total int
+	users, err := platformspanner.ReadConsistent(ctx, r.client, func(ctx context.Context, rtx platformspanner.ReadTransaction) ([]*domain.User, error) {
+		// Get total count
+		countStmt := spanner.Statement{
+			SQL: `SELECT COUNT(*) FROM Users WHERE Status != 'deleted'`,
 		}
-	}
+		countIter := rtx.Query(ctx, countStmt)
+		defer countIter.Stop()
 
-	// Query with pagination
-	stmt := spanner.Statement{
-		SQL: `SELECT UserID, Email, FirstName, LastName, Status, CreatedAt, UpdatedAt
-		      FROM Users
-		      WHERE Status != 'deleted'
-		      ORDER BY CreatedAt DESC
-		      LIMIT @limit OFFSET @offset`,
-		Params: map[string]interface{}{
-			"limit":  int64(limit),
-			"offset": int64(offset),
-		},
-	}
-
-	iter := rtx.Query(ctx, stmt)
-	defer iter.Stop()
-
-	var users []*domain.User
-	for {
-		row, err := iter.Next()
-		if err == iterator.Done {
-			break
+		var totalCount int64
+		countRow, err := countIter.Next()
+		if err != nil && err != iterator.Done {
+			return nil, fmt.Errorf("failed to count users: %w", err)
 		}
-		if err != nil {
-			return nil, 0, fmt.Errorf("failed to query users: %w", err)
+		if countRow != nil {
+			if err := countRow.Columns(&totalCount); err != nil {
+				return nil, fmt.Errorf("failed to scan count: %w", err)
+			}
+		}
+		total = int(totalCount)
+
+		// Query with pagination
+		stmt := spanner.Statement{
+			SQL: `SELECT UserID, Email, FirstName, LastName, Status, CreatedAt, UpdatedAt
+			      FROM Users
+			      WHERE Status != 'deleted'
+			      ORDER BY CreatedAt DESC
+			      LIMIT @limit OFFSET @offset`,
+			Params: map[string]interface{}{
+				"limit":  int64(limit),
+				"offset": int64(offset),
+			},
 		}
 
-		user, err := r.scanUser(row)
-		if err != nil {
-			return nil, 0, err
-		}
-		users = append(users, user)
-	}
+		iter := rtx.Query(ctx, stmt)
+		defer iter.Stop()
 
-	return users, int(total), nil
+		var users []*domain.User
+		for {
+			row, err := iter.Next()
+			if err == iterator.Done {
+				break
+			}
+			if err != nil {
+				return nil, fmt.Errorf("failed to query users: %w", err)
+			}
+
+			user, err := r.scanUser(row)
+			if err != nil {
+				return nil, err
+			}
+			users = append(users, user)
+		}
+
+		return users, nil
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	return users, total, nil
 }
 
 func (r *SpannerRepository) scanUser(row *spanner.Row) (*domain.User, error) {
