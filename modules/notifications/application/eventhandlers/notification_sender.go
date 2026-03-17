@@ -4,13 +4,13 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
+	"github.com/rai/clean-modularmonolith-go/modules/shared/idempotent"
 )
 
 // NotificationSender sends notifications via external services.
-// It embeds IdempotentBase so each outbound call is deduplicated on retry.
+// It embeds idempotent.Base so each outbound call is deduplicated on retry.
 type NotificationSender struct {
-	events.IdempotentBase
+	idempotent.Base
 	logger *slog.Logger
 }
 

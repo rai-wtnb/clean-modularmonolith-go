@@ -1,4 +1,4 @@
-package events
+package idempotent
 
 import (
 	"sync"
@@ -10,7 +10,7 @@ import (
 // bounding memory growth in long-running processes.
 const defaultOnceTTL = 5 * time.Minute
 
-// IdempotentBase is an embeddable struct for external-call clients (email,
+// Base is an embeddable struct for external-call clients (email,
 // HTTP, external APIs). Embed it in the client/sender, not in the
 // DomainEventHandler itself, so that transactional DB operations within the
 // same handler are unaffected and still re-run on Spanner retries.
@@ -22,7 +22,7 @@ const defaultOnceTTL = 5 * time.Minute
 // Example:
 //
 //	type EmailSender struct {
-//	    events.IdempotentBase
+//	    idempotent.Base
 //	    // ...
 //	}
 //
@@ -36,14 +36,14 @@ const defaultOnceTTL = 5 * time.Minute
 // on restart. Entries expire after defaultOnceTTL to bound memory growth.
 // For stronger guarantees across restarts or instances, use a persistent
 // backend instead.
-type IdempotentBase struct {
+type Base struct {
 	seen sync.Map
 }
 
 // Once executes fn only if key has not been seen within the TTL window.
 // Subsequent calls with the same key within the window return nil without
 // invoking fn.
-func (b *IdempotentBase) Once(key string, fn func() error) error {
+func (b *Base) Once(key string, fn func() error) error {
 	now := time.Now()
 	expiry := now.Add(defaultOnceTTL)
 

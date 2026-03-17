@@ -26,7 +26,7 @@ type ScopeWithDomainEvent interface {
 	// NOTE: The underlying transaction may be retried (e.g. Spanner Aborted),
 	// so fn — and therefore all subscribed handlers — can be invoked more than
 	// once per logical request. Handlers must account for this; see
-	// events.IdempotentBase for guidance.
+	// idempotent.Base for guidance.
 	ExecuteWithPublish(ctx context.Context, fn func(ctx context.Context) error) error
 }
 
