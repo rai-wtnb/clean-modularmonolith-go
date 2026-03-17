@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"cloud.google.com/go/spanner"
-	platformspanner "github.com/rai/clean-modularmonolith-go/internal/platform/spanner"
 )
 
 type Repo struct {
@@ -31,10 +30,3 @@ func (r *Repo) badBufferWrite(ctx context.Context, tx *spanner.ReadWriteTransact
 	tx.BufferWrite(nil) // want `direct call to \(\*spanner\.ReadWriteTransaction\)\.BufferWrite in persistence package`
 }
 
-func (r *Repo) badReadWriteTxFromContext(ctx context.Context) {
-	platformspanner.ReadWriteTxFromContext(ctx) // want `direct call to ReadWriteTxFromContext in persistence package`
-}
-
-func (r *Repo) badReadTransactionFromContext(ctx context.Context) {
-	platformspanner.ReadTransactionFromContext(ctx) // want `direct call to ReadTransactionFromContext in persistence package`
-}

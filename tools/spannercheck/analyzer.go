@@ -12,6 +12,10 @@ import (
 	"golang.org/x/tools/go/ast/inspector"
 )
 
+// NOTE: All context-accessor helpers (readWriteTxFromContext, readTransactionFromContext)
+// are unexported in the platform/spanner package. If exported accessors are ever added,
+// add them to a forbiddenFuncs check here.
+
 var Analyzer = &analysis.Analyzer{
 	Name:     "spannercheck",
 	Doc:      "checks that persistence packages use Spanner helpers instead of raw client calls",
@@ -19,10 +23,7 @@ var Analyzer = &analysis.Analyzer{
 	Run:      run,
 }
 
-const (
-	spannerPkg         = "cloud.google.com/go/spanner"
-	platformSpannerPkg = "github.com/rai/clean-modularmonolith-go/internal/platform/spanner"
-)
+const spannerPkg = "cloud.google.com/go/spanner"
 
 type methodKey struct {
 	typeName   string
@@ -31,33 +32,16 @@ type methodKey struct {
 
 var forbiddenMethods = map[methodKey]string{
 	{"Client", "Apply"}:                     "use platformspanner.Write",
-	{"Client", "Single"}:                    "use platformspanner.Read",
-	{"Client", "ReadOnlyTransaction"}:       "use platformspanner.ReadConsistent",
+	{"Client", "Single"}:                    "use platformspanner.SingleRead",
+	{"Client", "ReadOnlyTransaction"}:       "use platformspanner.ConsistentRead",
 	{"Client", "ReadWriteTransaction"}:      "use platformspanner.Write",
 	{"ReadWriteTransaction", "BufferWrite"}: "use DML via platformspanner.Write",
-}
-
-var forbiddenFuncs = map[string]string{
-	"ReadWriteTxFromContext":     "use platformspanner.Write",
-	"ReadTransactionFromContext": "use platformspanner.Read or platformspanner.ReadConsistent",
 }
 
 func run(pass *analysis.Pass) (interface{}, error) {
 	pkgPath := pass.Pkg.Path()
 	if !strings.Contains(pkgPath, "infrastructure/persistence") {
 		return nil, nil
-	}
-
-	// Build lookup set of forbidden package-level function objects by identity.
-	bannedFuncObjs := make(map[types.Object]string)
-	for _, imp := range pass.Pkg.Imports() {
-		if imp.Path() == platformSpannerPkg {
-			for funcName, suggestion := range forbiddenFuncs {
-				if obj := imp.Scope().Lookup(funcName); obj != nil {
-					bannedFuncObjs[obj] = suggestion
-				}
-			}
-		}
 	}
 
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
@@ -74,20 +58,8 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			return
 		}
 
-		// Check if this is a method call (has a Selection entry).
 		if selection, exists := pass.TypesInfo.Selections[sel]; exists {
 			checkMethod(pass, call, sel, selection)
-			return
-		}
-
-		// Otherwise it's a qualified identifier (pkg.Func).
-		if obj := pass.TypesInfo.ObjectOf(sel.Sel); obj != nil {
-			if suggestion, found := bannedFuncObjs[obj]; found {
-				pass.Reportf(call.Pos(),
-					"direct call to %s in persistence package; %s",
-					obj.Name(), suggestion,
-				)
-			}
 		}
 	})
 

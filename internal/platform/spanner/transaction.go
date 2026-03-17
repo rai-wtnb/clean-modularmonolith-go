@@ -6,67 +6,60 @@ import (
 	"cloud.google.com/go/spanner"
 )
 
-// ReadWriteTransactionScope manages the lifecycle of a Spanner read-write transaction.
-type ReadWriteTransactionScope struct {
-	client *spanner.Client
-}
-
-// NewReadWriteTransactionScope creates a new Spanner-backed transaction scope.
-// It should be called once per application startup in main.
-func NewReadWriteTransactionScope(client *spanner.Client) *ReadWriteTransactionScope {
-	return &ReadWriteTransactionScope{client: client}
-}
-
-// Execute runs fn within a Spanner ReadWriteTransaction.
-// If a ReadWriteTransaction already exists in ctx, fn joins that transaction
-// instead of creating a new one (REQUIRED propagation semantics).
-// The transaction is committed if fn returns nil, rolled back otherwise.
-// The ctx passed to fn contains the transaction for repositories to access via ReadWriteTxFromContext.
+// Write executes one or more DML statements within an existing read-write
+// transaction from the context, or creates a new transaction if none is active.
+// DML provides read-your-writes (RYW) consistency within a transaction.
 //
-// IMPORTANT: Spanner may retry fn on Aborted errors. Therefore:
-//   - fn must be idempotent
-//   - fn must NOT perform external side effects (email, API calls, etc.)
-//   - Any state (like TransactionalPublisher) should be created inside fn
-func (s *ReadWriteTransactionScope) Execute(ctx context.Context, fn func(ctx context.Context) error) error {
-	if _, ok := ReadWriteTxFromContext(ctx); ok {
-		return fn(ctx)
+// For a single statement, tx.Update is used directly.
+// For multiple statements, tx.BatchUpdate executes them in a single RPC.
+func Write(ctx context.Context, client *spanner.Client, stmts ...spanner.Statement) error {
+	if len(stmts) == 0 {
+		panic("spanner.Write: called with zero statements")
 	}
-	_, err := s.client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *spanner.ReadWriteTransaction) error {
-		txCtx, err := withReadWriteTx(ctx, tx)
-		if err != nil {
+
+	exec := func(ctx context.Context, tx *spanner.ReadWriteTransaction) error {
+		if len(stmts) == 1 {
+			_, err := tx.Update(ctx, stmts[0])
 			return err
 		}
-		return fn(txCtx)
+		_, err := tx.BatchUpdate(ctx, stmts)
+		return err
+	}
+
+	if txn, ok := readWriteTxFromContext(ctx); ok {
+		return exec(ctx, txn)
+	}
+	// Guard: if a read-only transaction is active, writing is a programming error.
+	// Without this check, a new independent RW transaction would be silently created,
+	// breaking atomicity with the surrounding read-only scope.
+	if _, ok := readOnlyTxFromContext(ctx); ok {
+		panic("spanner.Write: cannot write within a read-only transaction scope")
+	}
+	_, err := client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
+		return exec(ctx, txn)
 	})
 	return err
 }
 
-// ReadOnlyTransactionScope manages the lifecycle of a Spanner read-only transaction.
-// Use this when you need consistent reads across multiple queries without writes.
-type ReadOnlyTransactionScope struct {
-	client *spanner.Client
+// SingleRead executes fn with a read transaction from the context, or falls back to
+// client.Single() for a one-shot read.
+// Use this for operations that perform a single read call.
+func SingleRead[T any](ctx context.Context, client *spanner.Client, fn func(ctx context.Context, rtx ReadTransaction) (T, error)) (T, error) {
+	if rtx, ok := readTransactionFromContext(ctx); ok {
+		return fn(ctx, rtx)
+	}
+	return fn(ctx, client.Single())
 }
 
-// NewReadOnlyTransactionScope creates a new Spanner-backed read-only transaction scope.
-func NewReadOnlyTransactionScope(client *spanner.Client) *ReadOnlyTransactionScope {
-	return &ReadOnlyTransactionScope{client: client}
-}
-
-// Execute runs fn within a Spanner ReadOnlyTransaction.
-// If a ReadTransaction (read-write or read-only) already exists in ctx, fn joins
-// that transaction instead of creating a new one (REQUIRED propagation semantics).
-// The ctx passed to fn contains the transaction for repositories to access via ReadTransactionFromContext.
-// The transaction is closed automatically when Execute returns.
-func (s *ReadOnlyTransactionScope) Execute(ctx context.Context, fn func(ctx context.Context) error) error {
-	if _, ok := ReadTransactionFromContext(ctx); ok {
-		return fn(ctx)
+// ConsistentRead executes fn with a consistent read transaction from the context,
+// or creates a new ReadOnlyTransaction for point-in-time consistent reads.
+// Use this when performing multiple reads that must see a consistent snapshot
+// (e.g., COUNT + SELECT, or reading from multiple tables).
+func ConsistentRead[T any](ctx context.Context, client *spanner.Client, fn func(ctx context.Context, rtx ReadTransaction) (T, error)) (T, error) {
+	if rtx, ok := readTransactionFromContext(ctx); ok {
+		return fn(ctx, rtx)
 	}
-	tx := s.client.ReadOnlyTransaction()
-	defer tx.Close()
-
-	txCtx, err := withReadOnlyTx(ctx, tx)
-	if err != nil {
-		return err
-	}
-	return fn(txCtx)
+	roTx := client.ReadOnlyTransaction()
+	defer roTx.Close()
+	return fn(ctx, roTx)
 }

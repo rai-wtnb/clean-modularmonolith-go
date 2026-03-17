@@ -19,15 +19,15 @@ type readWriteTxKey struct{}
 // withReadWriteTx embeds a Spanner ReadWriteTransaction in the context.
 // Returns ErrNestedTransaction if a transaction already exists in the context.
 func withReadWriteTx(ctx context.Context, tx *spanner.ReadWriteTransaction) (context.Context, error) {
-	if _, ok := ReadTransactionFromContext(ctx); ok {
+	if _, ok := readTransactionFromContext(ctx); ok {
 		return nil, ErrNestedTransaction
 	}
 	return context.WithValue(ctx, readWriteTxKey{}, tx), nil
 }
 
-// ReadWriteTxFromContext extracts a Spanner ReadWriteTransaction from context.
+// readWriteTxFromContext extracts a Spanner ReadWriteTransaction from context.
 // Returns (nil, false) if no transaction is present.
-func ReadWriteTxFromContext(ctx context.Context) (*spanner.ReadWriteTransaction, bool) {
+func readWriteTxFromContext(ctx context.Context) (*spanner.ReadWriteTransaction, bool) {
 	tx, ok := ctx.Value(readWriteTxKey{}).(*spanner.ReadWriteTransaction)
 	return tx, ok
 }
@@ -38,7 +38,7 @@ type readOnlyTxKey struct{}
 // withReadOnlyTx embeds a Spanner ReadOnlyTransaction in the context.
 // Returns ErrNestedTransaction if a transaction already exists in the context.
 func withReadOnlyTx(ctx context.Context, tx *spanner.ReadOnlyTransaction) (context.Context, error) {
-	if _, ok := ReadTransactionFromContext(ctx); ok {
+	if _, ok := readTransactionFromContext(ctx); ok {
 		return nil, ErrNestedTransaction
 	}
 	return context.WithValue(ctx, readOnlyTxKey{}, tx), nil
@@ -62,12 +62,12 @@ type ReadTransaction interface {
 var _ ReadTransaction = (*spanner.ReadWriteTransaction)(nil)
 var _ ReadTransaction = (*spanner.ReadOnlyTransaction)(nil)
 
-// ReadTransactionFromContext extracts a ReadTransaction from context.
+// readTransactionFromContext extracts a ReadTransaction from context.
 // It checks ReadWriteTransaction first (for read-your-writes within a write tx),
 // then ReadOnlyTransaction.
 // Returns (nil, false) if no transaction is present.
-func ReadTransactionFromContext(ctx context.Context) (ReadTransaction, bool) {
-	if rwTx, ok := ReadWriteTxFromContext(ctx); ok {
+func readTransactionFromContext(ctx context.Context) (ReadTransaction, bool) {
+	if rwTx, ok := readWriteTxFromContext(ctx); ok {
 		return rwTx, true
 	}
 	if roTx, ok := readOnlyTxFromContext(ctx); ok {

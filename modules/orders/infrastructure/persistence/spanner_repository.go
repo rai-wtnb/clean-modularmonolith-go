@@ -75,7 +75,7 @@ func (r *SpannerRepository) Save(ctx context.Context, order *domain.Order) error
 }
 
 func (r *SpannerRepository) FindByID(ctx context.Context, id domain.OrderID) (*domain.Order, error) {
-	return platformspanner.ReadConsistent(ctx, r.client, func(ctx context.Context, reader platformspanner.ReadTransaction) (*domain.Order, error) {
+	return platformspanner.ConsistentRead(ctx, r.client, func(ctx context.Context, reader platformspanner.ReadTransaction) (*domain.Order, error) {
 		row, err := reader.ReadRow(ctx, "Orders",
 			spanner.Key{id.String()},
 			[]string{"OrderID", "UserID", "Status", "TotalAmount", "TotalCurrency", "CreatedAt", "UpdatedAt"},
@@ -122,7 +122,7 @@ func (r *SpannerRepository) FindByID(ctx context.Context, id domain.OrderID) (*d
 
 func (r *SpannerRepository) FindByUserRef(ctx context.Context, userRef domain.UserRef, offset, limit int) ([]*domain.Order, int, error) {
 	var total int
-	orders, err := platformspanner.ReadConsistent(ctx, r.client, func(ctx context.Context, reader platformspanner.ReadTransaction) ([]*domain.Order, error) {
+	orders, err := platformspanner.ConsistentRead(ctx, r.client, func(ctx context.Context, reader platformspanner.ReadTransaction) ([]*domain.Order, error) {
 		// Get total count
 		countStmt := spanner.Statement{
 			SQL:    `SELECT COUNT(*) FROM Orders WHERE UserID = @userID`,

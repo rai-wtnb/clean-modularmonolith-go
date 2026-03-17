@@ -18,13 +18,13 @@ func (r *Repo) goodWriteMultiple(ctx context.Context) {
 }
 
 func (r *Repo) goodRead(ctx context.Context) {
-	platformspanner.Read(ctx, r.client, func(_ context.Context, _ interface{}) (interface{}, error) {
+	platformspanner.SingleRead(ctx, r.client, func(_ context.Context, _ interface{}) (interface{}, error) {
 		return nil, nil
 	})
 }
 
 func (r *Repo) goodReadConsistent(ctx context.Context) {
-	platformspanner.ReadConsistent(ctx, r.client, func(_ context.Context, _ interface{}) (interface{}, error) {
+	platformspanner.ConsistentRead(ctx, r.client, func(_ context.Context, _ interface{}) (interface{}, error) {
 		return nil, nil
 	})
 }
