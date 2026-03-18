@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/rai/clean-modularmonolith-go/internal/platform/elasticsearch"
 	"github.com/rai/clean-modularmonolith-go/internal/platform/eventbus"
 	"github.com/rai/clean-modularmonolith-go/internal/platform/httpserver"
 	"github.com/rai/clean-modularmonolith-go/internal/platform/spanner"
@@ -59,6 +61,13 @@ func main() {
 	usersRepo := userspersistence.NewSpannerRepository(spannerClient)
 	ordersRepo := orderspersistence.NewSpannerRepository(spannerClient)
 
+	// Initialize Elasticsearch client
+	esClient, err := newElasticsearchClient(logger)
+	if err != nil {
+		logger.Error("failed to create elasticsearch client", slog.Any("error", err))
+		os.Exit(1)
+	}
+
 	// Initialize modules
 	// Each module subscribes to events it cares about internally
 	usersCfg := users.Config{
@@ -66,6 +75,9 @@ func main() {
 		ReadWriteTransactionScope: txScope,
 		ReadOnlyTransactionScope:  roTxScope,
 		Publisher:                 eventBus,
+		Subscriber:                eventBus,
+		ESClient:                  esClient,
+		Logger:                    logger,
 	}
 	usersModule := users.New(usersCfg)
 
@@ -145,6 +157,26 @@ func buildRouter(usersModule users.Module, ordersModule orders.Module) http.Hand
 	ordersModule.RegisterRoutes(mux)
 
 	return mux
+}
+
+// newElasticsearchClient creates an Elasticsearch client from environment config.
+func newElasticsearchClient(logger *slog.Logger) (elasticsearch.Client, error) {
+	addrs := getEnv("ELASTICSEARCH_ADDRESSES", "http://localhost:9200")
+
+	cfg := elasticsearch.Config{
+		Addresses: strings.Split(addrs, ","),
+		Username:  getEnv("ELASTICSEARCH_USERNAME", ""),
+		Password:  getEnv("ELASTICSEARCH_PASSWORD", ""),
+		APIKey:    getEnv("ELASTICSEARCH_API_KEY", ""),
+	}
+
+	client, err := elasticsearch.NewElasticsearchClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	logger.Info("elasticsearch client initialized", slog.String("addresses", addrs))
+	return client, nil
 }
 
 // getEnv returns the value of an environment variable or a default value.

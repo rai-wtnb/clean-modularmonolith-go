@@ -15,11 +15,12 @@ import (
 
 // Handler handles HTTP requests for the users module.
 type Handler struct {
-	createUser *commands.CreateUserHandler
-	updateUser *commands.UpdateUserHandler
-	deleteUser *commands.DeleteUserHandler
-	getUser    *queries.GetUserHandler
-	listUsers  *queries.ListUsersHandler
+	createUser  *commands.CreateUserHandler
+	updateUser  *commands.UpdateUserHandler
+	deleteUser  *commands.DeleteUserHandler
+	getUser     *queries.GetUserHandler
+	listUsers   *queries.ListUsersHandler
+	searchUsers *queries.SearchUsersHandler
 }
 
 // RegisterRoutes registers the users module routes to the given mux.
@@ -30,17 +31,20 @@ func RegisterRoutes(
 	deleteUser *commands.DeleteUserHandler,
 	getUser *queries.GetUserHandler,
 	listUsers *queries.ListUsersHandler,
+	searchUsers *queries.SearchUsersHandler,
 ) {
 	h := &Handler{
-		createUser: createUser,
-		updateUser: updateUser,
-		deleteUser: deleteUser,
-		getUser:    getUser,
-		listUsers:  listUsers,
+		createUser:  createUser,
+		updateUser:  updateUser,
+		deleteUser:  deleteUser,
+		getUser:     getUser,
+		listUsers:   listUsers,
+		searchUsers: searchUsers,
 	}
 
 	mux.HandleFunc("GET /users", h.handleListUsers)
 	mux.HandleFunc("POST /users", h.handleCreateUser)
+	mux.HandleFunc("GET /users/search", h.handleSearchUsers)
 	mux.HandleFunc("GET /users/{id}", h.handleGetUser)
 	mux.HandleFunc("PUT /users/{id}", h.handleUpdateUser)
 	mux.HandleFunc("DELETE /users/{id}", h.handleDeleteUser)
@@ -149,6 +153,31 @@ func (h *Handler) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) handleSearchUsers(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
+	if q == "" {
+		writeError(w, http.StatusBadRequest, "query parameter 'q' is required")
+		return
+	}
+
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+
+	query := queries.SearchUsersQuery{
+		Query:  q,
+		Offset: offset,
+		Limit:  limit,
+	}
+
+	result, err := h.searchUsers.Handle(r.Context(), query)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) handleListUsers(w http.ResponseWriter, r *http.Request) {
