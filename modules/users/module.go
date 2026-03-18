@@ -47,7 +47,8 @@ type module struct {
 }
 
 // New creates a new users module with all dependencies wired.
-func New(cfg Config) Module {
+// The returned cleanup function releases background resources.
+func New(cfg Config) (_ Module, cleanup func()) {
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -70,7 +71,8 @@ func New(cfg Config) Module {
 
 	// Subscribe to domain events for Elasticsearch sync
 	if cfg.Subscriber != nil && cfg.ESClient != nil {
-		indexer := eventhandlers.NewUserIndexer(cfg.ESClient, logger)
+		var indexer *eventhandlers.UserIndexer
+		indexer, cleanup = eventhandlers.NewUserIndexer(cfg.ESClient, logger)
 		handlers := []events.Handler{
 			eventhandlers.NewUserCreatedHandler(indexer),
 			eventhandlers.NewUserUpdatedHandler(indexer),
@@ -93,7 +95,7 @@ func New(cfg Config) Module {
 		getUserHandler:     getUserHandler,
 		listUsersHandler:   listUsersHandler,
 		searchUsersHandler: searchUsersHandler,
-	}
+	}, cleanup
 }
 
 func (m *module) RegisterRoutes(mux *http.ServeMux) {

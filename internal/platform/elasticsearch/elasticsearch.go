@@ -46,10 +46,7 @@ func NewElasticsearchClient(cfg Config) (*ElasticsearchClient, error) {
 var _ Client = (*ElasticsearchClient)(nil)
 
 func (c *ElasticsearchClient) Index(ctx context.Context, index string, doc Document) error {
-	_, err := c.client.Index(index).
-		Id(doc.ID).
-		Request(doc.Body).
-		Do(ctx)
+	_, err := c.client.Index(index).Id(doc.ID).Request(doc.Body).Do(ctx)
 	if err != nil {
 		return fmt.Errorf("indexing document %s: %w", doc.ID, err)
 	}

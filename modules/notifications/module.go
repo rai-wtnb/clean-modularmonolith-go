@@ -16,11 +16,12 @@ type Config struct {
 }
 
 // New initializes the notification module and subscribes to events.
-func New(cfg Config) *Module {
+// The returned cleanup function releases background resources.
+func New(cfg Config) (_ *Module, cleanup func()) {
 	logger := cfg.Logger.With("module", "notifications")
 
 	// Initialize event handlers
-	sender := eventhandlers.NewNotificationSender(logger)
+	sender, cleanup := eventhandlers.NewNotificationSender(logger)
 	orderSubmittedHandler := eventhandlers.NewOrderSubmittedHandler(sender)
 
 	// Subscribe to events
@@ -29,5 +30,5 @@ func New(cfg Config) *Module {
 		// specific error handling strategy (panic vs log) depends on requirements
 	}
 
-	return &Module{}
+	return &Module{}, cleanup
 }

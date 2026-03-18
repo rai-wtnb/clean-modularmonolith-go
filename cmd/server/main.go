@@ -79,7 +79,10 @@ func main() {
 		ESClient:                  esClient,
 		Logger:                    logger,
 	}
-	usersModule := users.New(usersCfg)
+	usersModule, usersCleanup := users.New(usersCfg)
+	if usersCleanup != nil {
+		defer usersCleanup()
+	}
 
 	ordersCfg := orders.Config{
 		Repository:       ordersRepo,
@@ -96,7 +99,8 @@ func main() {
 		EventSubscriber: eventBus,
 		Logger:          logger,
 	}
-	_ = notifications.New(notificationCfg)
+	_, notificationsCleanup := notifications.New(notificationCfg)
+	defer notificationsCleanup()
 
 	// Log all event subscriptions after module initialization
 	eventBus.LogSubscriptions()
