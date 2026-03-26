@@ -130,7 +130,7 @@ Events and state changes must be atomic. `ScopeWithDomainEvent` ensures they alw
 
 ```go
 // In module.go — wire ScopeWithDomainEvent once
-txScope := transaction.NewScopeWithDomainEvent(cfg.TransactionScope, cfg.Publisher)
+txScope := events.NewScopeWithDomainEvent(cfg.TransactionScope, cfg.Publisher)
 
 // In command handler — just run business logic
 return h.txScope.ExecuteWithPublish(ctx, func(ctx context.Context) error {
@@ -161,19 +161,19 @@ This keeps business logic cohesive — the aggregate, not the application servic
 
 ### 5. Event Contracts as Public API
 
-Modules don't import each other's domain packages. Instead, event contracts are published in a shared kernel:
+Modules don't import each other's internal domain packages. Instead, cross-module events are defined in a dedicated `domain/events/` sub-package within each module:
 
 ```go
-// shared/events/contracts/users.go — This IS the public API
+// modules/users/domain/events/user_deleted.go — Public API for cross-module consumption
 const UserDeletedEventType events.EventType = "users.UserDeleted"
 
 type UserDeletedEvent struct {
     events.BaseEvent
-    UserID string `json:"user_id"`
+    UserID string
 }
 ```
 
-The orders module subscribes to `UserDeletedEvent` without knowing anything about the users module's internals. This is an **Anti-Corruption Layer by design**.
+The orders module imports `modules/users/domain/events` to subscribe to `UserDeletedEvent` without knowing anything about the users module's internals. Internal events (like `UserCreatedEvent`) stay in `domain/events.go` and are not importable by other modules.
 
 ### 6. Value Objects Validate at Construction
 
@@ -247,12 +247,14 @@ make deps-svg   # Generate dependency graph
 
 ## Trade-offs
 
-| Decision | Benefit | Cost |
-|----------|---------|------|
-| Synchronous in-process events | Transaction consistency, simpler debugging | No parallelism, single point of failure |
-| In-memory event bus | Zero infrastructure, predictable behavior | Not durable; for production, use outbox pattern |
-| Module-per-bounded-context | Clear ownership, independent evolution | May need to split further as team grows |
-| No ORM | Full control, explicit queries | More boilerplate |
+
+| Decision                      | Benefit                                    | Cost                                            |
+| ----------------------------- | ------------------------------------------ | ----------------------------------------------- |
+| Synchronous in-process events | Transaction consistency, simpler debugging | No parallelism, single point of failure         |
+| In-memory event bus           | Zero infrastructure, predictable behavior  | Not durable; for production, use outbox pattern |
+| Module-per-bounded-context    | Clear ownership, independent evolution     | May need to split further as team grows         |
+| No ORM                        | Full control, explicit queries             | More boilerplate                                |
+
 
 ## References
 

@@ -66,9 +66,12 @@ Aggregates call `events.Add(ctx, event)` directly in business methods. No embedd
 
 ```go
 // modules/shared/events/context.go
-func NewContext(ctx context.Context) context.Context  // Initializes fresh collector
-func Add(ctx context.Context, evts ...Event)           // Adds events to collector
-func Collect(ctx context.Context) []Event              // Drains and returns all events
+func Add(ctx context.Context, evts ...Event)                                         // Adds events to collector (public)
+func CaptureEvents(ctx context.Context, fn func(ctx context.Context) error) ([]Event, error) // Test helper
+
+// Internal (used by ScopeWithDomainEvent):
+// newContext(ctx) — initializes fresh collector
+// collect(ctx)   — drains and returns all events
 ```
 
 Usage in aggregate:
@@ -98,14 +101,16 @@ type Scope interface {
 
 ### 3. transaction.ScopeWithDomainEvent
 
-Wraps `Scope` with automatic event collection and publishing (`modules/shared/transaction/event_scope.go`):
+Interface defined in `modules/shared/transaction/event_scope.go`, implementation in `modules/shared/events/scope.go`:
 
 ```go
+// modules/shared/transaction/event_scope.go — interface
 type ScopeWithDomainEvent interface {
     ExecuteWithPublish(ctx context.Context, fn func(ctx context.Context) error) error
 }
 
-func NewScopeWithDomainEvent(inner Scope, publisher events.Publisher) ScopeWithDomainEvent
+// modules/shared/events/scope.go — factory and implementation
+func NewScopeWithDomainEvent(inner transaction.Scope, publisher Publisher) transaction.ScopeWithDomainEvent
 ```
 
 The implementation:
@@ -124,36 +129,47 @@ func (s *scopeWithDomainEventImpl) ExecuteWithPublish(ctx context.Context, fn fu
 
 ### 4. Transaction-aware Repository
 
-Repositories check context for an existing transaction:
+Repositories extract the transaction from context to participate in the active transaction. The context-extraction functions are private to the `internal/platform/spanner` package:
 
 ```go
 func (r *SpannerRepository) Save(ctx context.Context, user *domain.User) error {
-    if txn, ok := transaction.TxFromContext(ctx); ok {
+    if txn, ok := readWriteTxFromContext(ctx); ok {
         return txn.BufferWrite(mutations)  // Use existing transaction
     }
-    _, err := r.client.Apply(ctx, mutations)  // Standalone transaction
+    _, err := r.client.Apply(ctx, mutations)  // Standalone write
     return err
 }
 ```
 
 ### 5. EventBus
 
-Implements both `events.Publisher` and `events.Subscriber`. `Publish(ctx)` drains the context collector and dispatches events synchronously using a drain loop (handlers may add new events):
+Implements both `events.Publisher` and `events.Subscriber`. `Publish(ctx, evts)` dispatches events synchronously to registered handlers. The **drain loop** (collecting cascading events from handlers) lives in `ScopeWithDomainEvent.ExecuteWithPublish`, not in the EventBus itself:
 
 ```go
 // internal/platform/eventbus/eventbus.go
-func (b *EventBus) Publish(ctx context.Context) error {
-    for {
-        pending := events.Collect(ctx)
-        if len(pending) == 0 {
-            return nil
+func (b *EventBus) Publish(ctx context.Context, evts []events.Event) error {
+    for _, event := range evts {
+        if err := b.processEvent(ctx, event); err != nil {
+            return err
         }
-        for _, event := range pending {
-            if err := b.processEvent(ctx, event); err != nil {
+    }
+    return nil
+}
+
+// modules/shared/events/scope.go — drain loop lives here
+func (s *scopeWithDomainEventImpl) ExecuteWithPublish(ctx context.Context, fn func(ctx context.Context) error) error {
+    return s.inner.Execute(ctx, func(ctx context.Context) error {
+        ctx = newContext(ctx)
+        if err := fn(ctx); err != nil {
+            return err
+        }
+        for evts := collect(ctx); len(evts) > 0; evts = collect(ctx) {
+            if err := s.publisher.Publish(ctx, evts); err != nil {
                 return err
             }
         }
-    }
+        return nil
+    })
 }
 ```
 
@@ -250,7 +266,7 @@ event := NewUserDeletedEvent(user.ID(), user.Email(), user.Name())
 
 Event handlers may publish new events (depth-first execution). The `EventBus` tracks call stack depth via context (max 10 levels by default).
 
-If a handler publishes an event, its handlers execute immediately (nested). If the nesting depth exceeds the limit, `ErrEventProcessingDepthExceeded` is returned and the transaction rolls back.
+If a handler publishes an event, its handlers execute immediately (nested). If the nesting depth exceeds the limit, an `"event processing depth exceeded"` error is returned and the transaction rolls back.
 
 ## Event Handler Guidelines
 
@@ -287,27 +303,28 @@ Key points:
 - Return errors to trigger rollback
 - **No external API calls or side effects**
 
-### Handlers Running Outside Transactions
+### Handlers Intended for Future Async Processing
 
-For handlers with external side effects (email, Pub/Sub, etc.):
+Some handlers are designed to eventually run outside the transaction (e.g., sending emails). Currently, **all handlers run synchronously** within the same transaction via the in-process EventBus:
 
 ```go
-// This handler runs via EventBus (currently in-process but logically non-transactional)
+// Currently runs in-process (same transaction context), but designed for future async migration
 type OrderSubmittedHandler struct {
     logger *slog.Logger
 }
 
 func (h *OrderSubmittedHandler) Handle(ctx context.Context, event events.Event) error {
-    // Safe to perform external operations here
-    h.logger.Info("sending confirmation email", slog.String("order_id", event.AggregateID()))
+    // Currently: avoid external side effects (handler may retry with the transaction)
+    h.logger.Info("sending confirmation email", slog.String("order_id", event.EventID()))
     return nil
 }
 ```
 
 **Future migration path**: These handlers will move to Pub/Sub subscriptions where:
 
-- Events are published to a message queue after commit
+- Events are published to a message queue after commit (via outbox pattern)
 - Handlers process asynchronously with idempotency (event ID deduplication)
+- External side effects (email, SMS) become safe
 
 ## Migration Path to Outbox Pattern
 
@@ -351,7 +368,7 @@ The migration requires:
 | `events.Add(ctx, event)`   | Collect events during business operations            |
 | `transaction.Scope`        | Manage transaction lifecycle                         |
 | `ScopeWithDomainEvent`     | Initialize collector, execute fn, publish events     |
-| `TxFromContext`            | Enable repositories to join existing transactions    |
+| Context-embedded transaction | Enable repositories to join existing transactions  |
 | `EventBus`                 | Subscribe handlers and publish events synchronously  |
 
 This pattern achieves:

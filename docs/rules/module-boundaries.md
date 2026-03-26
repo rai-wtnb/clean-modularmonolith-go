@@ -55,8 +55,8 @@ Module B (Publisher)              Module A (Subscriber)
 ```
 
 ```go
-// GOOD: Subscribe to events using the shared contract
-cfg.Subscriber.Subscribe(contracts.UserDeletedEventType, handler)
+// GOOD: Subscribe to events via the handler's self-declared EventType
+cfg.Subscriber.Subscribe(handler.EventType(), handler)
 
 // BAD: Call other module's internal methods
 usersModule.DeleteUserOrders(userID)  // Tight coupling!
@@ -64,11 +64,26 @@ usersModule.DeleteUserOrders(userID)  // Tight coupling!
 
 **Why:** Events enable loose coupling. Publishers don't know about subscribers.
 
-### 4. Shared Kernel Exception
+### 4. Cross-Module Events in `domain/events/` Sub-package
 
-The `modules/shared` package is the only exception. It contains:
-- Domain event infrastructure (`events.Event`, `events.Publisher`)
-- Truly shared value objects (if any)
+Events consumed by other modules are defined in a dedicated `domain/events/` sub-package within the publishing module. Internal events stay in `domain/events.go`:
+
+```go
+// modules/users/domain/events/user_deleted.go — importable by other modules
+const UserDeletedEventType events.EventType = "users.UserDeleted"
+type UserDeletedEvent struct { ... }
+
+// modules/users/domain/events.go — internal to users module
+const UserCreatedEventType events.EventType = "users.UserCreated"
+type UserCreatedEvent struct { ... }
+```
+
+### 5. Shared Kernel Exception
+
+The `modules/shared` package is the only cross-cutting dependency. It contains:
+- Domain event infrastructure (`events.Event`, `events.Publisher`, `events.Subscriber`)
+- Transaction abstractions (`transaction.Scope`, `transaction.ScopeWithDomainEvent`)
+- Idempotency utilities (`idempotent.OutboundCache`)
 
 ```go
 // OK: Shared kernel imports
@@ -77,7 +92,7 @@ import "github.com/example/app/modules/shared/events"
 
 **Why:** Some infrastructure must be shared to enable communication.
 
-### 5. No Circular Dependencies
+### 6. No Circular Dependencies
 
 Module dependencies must form a directed acyclic graph (DAG).
 
@@ -91,15 +106,15 @@ users ──event──▶ orders
 
 **Why:** Circular dependencies make the system impossible to understand and test.
 
-### 6. Typed IDs Across Boundaries
+### 7. Typed IDs Across Boundaries
 
 When passing IDs across module boundaries (e.g., in event contracts), use primitive types (`string`) in the contract structs. Parse to typed IDs at the receiving module boundary:
 
 ```go
-// modules/shared/events/contracts/users.go
+// modules/users/domain/events/user_deleted.go
 type UserDeletedEvent struct {
     events.BaseEvent
-    UserID string `json:"user_id"`  // Primitive — no module coupling
+    UserID string  // Primitive — no module coupling
 }
 
 // In the event handler (orders module)
@@ -113,7 +128,8 @@ userID, err := domain.ParseUserID(e.UserID)  // Parse at boundary
 | Action | Allowed | Prohibited |
 |--------|:-------:|:----------:|
 | Import `modules/xxx/module.go` | ✓ | |
-| Import `modules/xxx/domain/*.go` | | ✗ |
+| Import `modules/xxx/domain/events/` (cross-module events) | ✓ | |
+| Import `modules/xxx/domain/*.go` (internal types) | | ✗ |
 | Import `modules/xxx/application/*.go` | | ✗ |
 | Import `modules/xxx/infrastructure/*.go` | | ✗ |
 | Import `modules/shared/*` | ✓ | |

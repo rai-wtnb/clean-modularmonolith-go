@@ -89,5 +89,5 @@ This module has no aggregates. It is purely event-driven.
 
 ## Transaction Boundaries
 
-- **UserDeletedHandler** (in Orders): Runs within the same transaction as user deletion, ensuring atomic consistency
-- **OrderSubmittedHandler** (in Notifications): Runs outside the transaction (async-ready for future Pub/Sub migration)
+- **UserDeletedHandler** (in Orders): Runs within the same transaction as user deletion, ensuring atomic consistency. Performs database operations only (cancels orders).
+- **OrderSubmittedHandler** (in Notifications): Currently runs synchronously in-process via the EventBus (same transaction context). Designed for future migration to async Pub/Sub, at which point it will run outside the transaction with at-least-once delivery.

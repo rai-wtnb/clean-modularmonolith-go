@@ -20,7 +20,7 @@ go test -run TestUserCreate ./modules/users/...  # Run specific test
 - `modules/users` — User management bounded context
 - `modules/orders` — Order management bounded context
 - `modules/notifications` — Notification handling (event-driven)
-- `modules/shared` — Shared kernel: `events`, `transaction`
+- `modules/shared` — Shared kernel: `events`, `transaction`, `idempotent`
 - `internal/platform` — Infrastructure: event bus, HTTP server, Spanner
 - `cmd/server` — Composition root
 
@@ -32,4 +32,4 @@ go test -run TestUserCreate ./modules/users/...  # Run specific test
 
 **CQRS**: Commands use `ScopeWithDomainEvent`; queries use `transaction.Scope` (read-only) or no scope.
 
-**Module public API**: Each module exposes only `RegisterRoutes(mux *http.ServeMux)`. Cross-module communication uses domain events via contracts in `modules/shared/events/contracts`.
+**Module public API**: Each module exposes only `RegisterRoutes(mux *http.ServeMux)`. Cross-module communication uses domain events defined in each module's `domain/events/` sub-package (e.g., `modules/users/domain/events/`).

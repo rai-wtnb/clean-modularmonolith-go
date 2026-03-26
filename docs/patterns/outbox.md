@@ -78,10 +78,12 @@ CREATE TABLE Outbox (
 
 ### Domain Event Collection
 
+> **Note:** The outbox pattern typically uses aggregate-embedded event collection (shown below). This project currently uses **context-based** event collection (`events.Add(ctx, event)`) with `ScopeWithDomainEvent`. If migrating to the outbox pattern, the repository would drain events from `ctx` instead of the aggregate.
+
 Aggregates collect events during business operations:
 
 ```go
-// domain/order.go
+// Outbox approach: aggregate-embedded events
 type Order struct {
     // ... fields
     events []events.Event

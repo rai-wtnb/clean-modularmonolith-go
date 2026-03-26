@@ -6,24 +6,24 @@ Unit of Work is a pattern that maintains a list of objects affected by a busines
 
 ## Current Design
 
-This project **does not use Unit of Work**.
-Transactions are encapsulated within individual repositories.
+This project **does not use Unit of Work**. Instead, it uses `transaction.Scope` and `transaction.ScopeWithDomainEvent` to manage transaction lifecycle. The transaction is embedded in `context.Context` and repositories extract it automatically:
 
 ```go
-// orders/infrastructure/persistence/spanner_repository.go
-func (r *SpannerRepository) Save(ctx context.Context, order *domain.Order) error {
-    _, err := r.client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
-        // Single aggregate save protected by transaction
+// Command handler uses ScopeWithDomainEvent for transactional writes
+func (h *DeleteUserHandler) Handle(ctx context.Context, cmd DeleteUserCommand) error {
+    return h.txScope.ExecuteWithPublish(ctx, func(ctx context.Context) error {
+        user, _ := h.repo.FindByID(ctx, userID)  // Joins transaction via ctx
+        user.Delete(ctx)
+        return h.repo.Save(ctx, user)             // Joins same transaction via ctx
     })
-    return err
 }
 ```
 
 ### Why This Design Works
 
-1. **Module boundaries**: Modules are independent; inter-module communication uses events (eventual consistency)
+1. **Module boundaries**: Modules are independent; cross-module communication uses domain events (synchronous, atomic)
 2. **Aggregate-scoped transactions**: In DDD, the aggregate is the consistency boundary
-3. **Simplicity**: Application layer doesn't need to know infrastructure details
+3. **Context-based propagation**: Repositories join the active transaction transparently via `ctx`
 
 ## When Unit of Work Is Needed
 

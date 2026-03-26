@@ -81,8 +81,10 @@ func (h *ApplyDiscountHandler) Handle(ctx context.Context, cmd ApplyDiscountComm
 | Layer | Responsibility | Transaction |
 |-------|----------------|-------------|
 | Domain Service | Business logic (what to do) | Not involved |
-| Command Handler | Orchestration | Not involved |
-| Repository | Persistence (how to save) | Encapsulated inside |
+| Command Handler | Orchestration | Managed via `transaction.Scope` |
+| Repository | Persistence (how to save) | Joins transaction from `ctx` |
+
+> **Note:** This project uses `transaction.Scope` / `ScopeWithDomainEvent` to manage transactions at the command handler level, rather than encapsulating transactions inside individual repository methods.
 
 ## Why This Works
 
