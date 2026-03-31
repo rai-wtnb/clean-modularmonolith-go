@@ -11,7 +11,8 @@ import (
 const usersIndex = "users"
 
 // UserIndexer indexes/deletes user documents in Elasticsearch.
-// It embeds idempotent.OutboundCache so each outbound call is deduplicated on Spanner retry.
+// It embeds idempotent.OutboundCache so each outbound call is
+// deduplicated, providing at-most-once delivery in post-commit handlers.
 type UserIndexer struct {
 	*idempotent.OutboundCache
 	esClient elasticsearch.Client

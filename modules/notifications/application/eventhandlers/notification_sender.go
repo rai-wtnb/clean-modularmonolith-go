@@ -7,7 +7,8 @@ import (
 )
 
 // NotificationSender sends notifications via external services.
-// It embeds idempotent.OutboundCache so each outbound call is deduplicated on retry.
+// It embeds idempotent.OutboundCache so each outbound call is
+// deduplicated, providing at-most-once delivery in post-commit handlers.
 type NotificationSender struct {
 	*idempotent.OutboundCache
 	logger *slog.Logger
@@ -29,8 +30,8 @@ func (s *NotificationSender) SendOrderConfirmation(orderID string) error {
 }
 
 // SendOrderShipped sends a shipment notification and returns the external
-// message ID. On Spanner retry the cached message ID is returned without
-// re-sending.
+// message ID. On duplicate invocation the cached message ID is returned
+// without re-sending.
 func (s *NotificationSender) SendOrderShipped(orderID, trackingNumber string) (string, error) {
 	return idempotent.OnceResult(s.OutboundCache, "send-shipped", orderID, func() (string, error) {
 		s.logger.Info("sending shipment notification", slog.String("order_id", orderID), slog.String("tracking_number", trackingNumber))

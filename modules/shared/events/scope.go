@@ -2,9 +2,16 @@ package events
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/rai/clean-modularmonolith-go/modules/shared/transaction"
 )
+
+// maxDrainIterations limits how many times the drain loop can iterate.
+// Each iteration collects events added by handlers and publishes them.
+// If this limit is exceeded, a handler chain is likely producing a cycle
+// (e.g., handler A emits event B, handler B emits event A).
+const maxDrainIterations = 10
 
 // scopeWithDomainEventImpl composes a transaction.Scope with event collection
 // and publishing. It is the sole orchestrator of the event lifecycle:
@@ -39,7 +46,10 @@ func (s *scopeWithDomainEventImpl) ExecuteWithPublish(ctx context.Context, fn fu
 			return err
 		}
 
-		for evts := collect(ctx); len(evts) > 0; evts = collect(ctx) {
+		for i, evts := 0, collect(ctx); len(evts) > 0; i, evts = i+1, collect(ctx) {
+			if i >= maxDrainIterations {
+				return fmt.Errorf("event drain loop exceeded %d iterations: possible event cycle", maxDrainIterations)
+			}
 			if err := s.publisher.Publish(ctx, evts); err != nil {
 				return err
 			}

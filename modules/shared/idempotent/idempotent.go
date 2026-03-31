@@ -10,8 +10,9 @@ import (
 )
 
 // defaultTTL is how long a deduplication entry is retained.
-// Sized to outlast Spanner Aborted retry windows (typically seconds) while
-// bounding memory growth in long-running processes.
+// Sized to bound memory growth in long-running processes while outlasting
+// reasonable retry windows (Spanner Aborted retries for pre-commit use,
+// or duplicate event deliveries for post-commit use).
 const defaultTTL = 5 * time.Minute
 
 // hash is a content hash produced by HashInput.
@@ -28,8 +29,13 @@ type entry struct {
 // OutboundCache provides deduplication for outbound calls to external
 // services (Elasticsearch, email, HTTP APIs). Embed or store in the
 // client/sender, not in the DomainEventHandler itself, so that transactional
-// DB operations within the same handler are unaffected and still re-run on
-// Spanner retries.
+// DB operations within the same handler are unaffected.
+//
+// Current users are post-commit event handlers, where the primary value is
+// at-most-once delivery guarantees and readiness for future Pub/Sub migration
+// (where at-least-once delivery makes deduplication essential). The cache
+// also supports pre-commit (Spanner retry) deduplication if embedded in a
+// handler that runs inside a transaction.
 //
 // Wrap each outbound call with Once(key, fn) or Once(key, fn, inputHash):
 //

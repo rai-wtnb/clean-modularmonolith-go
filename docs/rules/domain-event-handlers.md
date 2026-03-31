@@ -2,16 +2,16 @@
 
 This document describes critical constraints that domain event subscribers (handlers) must follow.
 
-## Transaction Context
+## Handler Phases
 
-Domain event handlers in this system can run in two contexts:
+Domain event handlers run in one of two phases, determined by how they are subscribed:
 
-| Context | Example | Characteristics |
-|---------|---------|-----------------|
-| **Transactional** | `UserDeletedHandler` in Orders | Runs within the same Spanner transaction as the command |
-| **Non-transactional** | `OrderSubmittedHandler` in Notifications | Runs outside the transaction (async-ready) |
+| Phase | Subscription | Example | Characteristics |
+|-------|-------------|---------|-----------------|
+| **Pre-commit** | `Subscribe()` | `UserDeletedHandler` in Orders | Runs inside the Spanner transaction. Errors roll back the transaction. |
+| **Post-commit** | `SubscribePostCommit()` | `OrderSubmittedHandler` in Notifications, `UserIndexer` in Users | Runs after successful commit in a detached goroutine. Errors are logged, not propagated. |
 
-## Constraints for Transactional Handlers
+## Constraints for Pre-commit Handlers
 
 ### 1. No External Side Effects
 
@@ -21,11 +21,12 @@ Spanner's `ReadWriteTransaction` automatically retries the callback function whe
 Command Execute
     └─> Transaction Start
          ├─> Business Logic
-         ├─> Event Publish (handlers execute immediately)  ← May be retried!
+         ├─> Event Publish (pre-commit handlers execute)  ← May be retried!
          └─> Commit (or Retry from Start)
+    └─> Post-commit handlers (not retried)
 ```
 
-**Prohibited actions in transactional handlers:**
+**Prohibited actions in pre-commit handlers:**
 
 - Sending emails, SMS, push notifications
 - Calling external APIs (payment, shipping, etc.)
@@ -33,18 +34,23 @@ Command Execute
 - Logging audit events to external systems
 - Any action that cannot be rolled back
 
-**Why:** If the transaction retries, these side effects will execute multiple times.
+**Why:** If the transaction retries, these side effects will execute multiple times. Use **post-commit handlers** (`SubscribePostCommit`) for external side effects instead.
 
 ```go
-// BAD: External side effect in transactional handler
+// BAD: External side effect in pre-commit handler
 func (h *UserDeletedHandler) Handle(ctx context.Context, event events.Event) error {
     h.emailService.Send("user-deleted@example.com", "...") // Sent on every retry!
     return h.orderRepo.CancelUserOrders(ctx, userID)
 }
 
-// GOOD: Only database operations
+// GOOD: Only database operations in pre-commit handler
 func (h *UserDeletedHandler) Handle(ctx context.Context, event events.Event) error {
     return h.orderRepo.CancelUserOrders(ctx, userID) // Rolled back on retry
+}
+
+// GOOD: External side effects in post-commit handler (registered via SubscribePostCommit)
+func (h *OrderSubmittedHandler) Handle(ctx context.Context, event events.Event) error {
+    return h.sender.SendOrderConfirmation(orderID) // Runs after commit, not retried
 }
 ```
 
@@ -106,7 +112,7 @@ func (h *DeleteUserHandler) Handle(ctx context.Context, cmd DeleteUserCommand) e
 
 ### 4. Handler Errors Cause Transaction Rollback
 
-If a transactional handler returns an error, the entire transaction is rolled back.
+If a pre-commit handler returns an error, the entire transaction is rolled back.
 
 ```go
 func (h *UserDeletedHandler) Handle(ctx context.Context, event events.Event) error {
@@ -117,55 +123,51 @@ func (h *UserDeletedHandler) Handle(ctx context.Context, event events.Event) err
 }
 ```
 
-**Consider:** Whether the handler failure should block the originating command. If not, the handler should be non-transactional.
+**Consider:** Whether the handler failure should block the originating command. If not, register it as a post-commit handler instead.
 
-## Constraints for Non-Transactional Handlers
+## Constraints for Post-commit Handlers
 
-### 1. Idempotency Required
+Post-commit handlers run after the transaction commits successfully, in a separate goroutine with a detached context.
 
-Non-transactional handlers (future Pub/Sub subscribers) may receive the same event multiple times due to:
-- At-least-once delivery guarantees
-- Network issues causing redelivery
-- Consumer restarts
+### 1. Best-effort Delivery
 
-**Solution:** Use event ID for deduplication.
+Post-commit handler errors are **logged but not propagated** to the caller. The originating transaction has already committed. If a handler fails, the side effect is lost unless the handler itself implements retry logic.
 
-```go
-func (h *OrderSubmittedHandler) Handle(ctx context.Context, event events.Event) error {
-    // Check if already processed
-    if h.processedEvents.Contains(event.EventID()) {
-        return nil // Skip duplicate
-    }
+### 2. Idempotency Recommended
 
-    // Process event
-    if err := h.sendConfirmationEmail(event); err != nil {
-        return err
-    }
+Although the current in-process `EventBus` delivers post-commit events exactly once per successful commit, designing handlers to be idempotent prepares for future migration to Pub/Sub (at-least-once delivery). Use event ID for deduplication where appropriate.
 
-    // Mark as processed
-    h.processedEvents.Add(event.EventID())
-    return nil
-}
-```
+### 3. No Transaction Context
 
-### 2. Eventual Consistency
+Post-commit handlers do **not** have access to the originating transaction. If they need to perform database operations, they must create their own transaction or use standalone operations.
 
-Non-transactional handlers see data after the originating transaction commits. The system is eventually consistent.
+### 4. Detached Context
+
+The context passed to post-commit handlers is detached from the original HTTP request context. This means:
+
+- The handler is not cancelled when the HTTP request completes
+- Trace spans are preserved for observability
+- Deadlines and cancellation signals from the original request are not inherited
+
+### 5. Eventual Consistency
+
+Post-commit handlers see data after the originating transaction commits. The system is eventually consistent for post-commit side effects.
 
 ```
-Transaction Commit → Event Published → Handler Reads (sees committed data)
+Transaction Commit → PublishPostCommit() → Handler runs (sees committed data)
 ```
 
 ## Quick Reference
 
-| Constraint | Transactional | Non-Transactional |
-|------------|:-------------:|:-----------------:|
-| No external side effects | **Required** | Allowed |
-| Use DML (not Mutations) | **Required** | N/A |
-| Fresh event collector per retry | **Required** | N/A |
-| Handler error = rollback | Yes | No |
-| Idempotency | Nice to have | **Required** |
+| Constraint | Pre-commit | Post-commit |
+|------------|:----------:|:-----------:|
+| No external side effects | **Required** | Allowed (this is the intended use) |
+| Use DML (not Mutations) | **Required** | N/A (no transaction context) |
+| Fresh event collector per retry | Automatic | N/A |
+| Handler error = rollback | Yes | No (logged only) |
+| Idempotency | Nice to have | Recommended |
 | Data consistency | Strong | Eventual |
+| Runs in transaction | Yes | No |
 
 ## See Also
 

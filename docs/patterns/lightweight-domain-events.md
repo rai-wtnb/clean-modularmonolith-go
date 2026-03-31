@@ -1,38 +1,39 @@
 # Lightweight Domain Events Pattern
 
-This document describes the lightweight domain events implementation pattern used in this codebase. It enables event handlers to participate in the same database transaction as the originating command, ensuring atomic consistency across module boundaries.
+This document describes the lightweight domain events implementation pattern used in this codebase. It supports two phases of event handling:
+
+- **Pre-commit handlers**: Run inside the transaction boundary, ensuring atomic consistency across module boundaries. Failures roll back the transaction.
+- **Post-commit handlers**: Run after the transaction commits successfully. Used for external side effects (notifications, search index updates). Failures are logged but do not affect the caller.
 
 ## Overview
 
 ### Problem
 
-In a modular monolith, modules communicate via domain events. However, when an event handler performs database operations, those operations may need to be part of the same transaction as the original command:
+In a modular monolith, modules communicate via domain events. Different handlers have different consistency requirements:
 
-```
-  repo.Save()  →  [COMMIT]  →  publisher.Publish()  →  handler.Handle()
-                     ↑
-         Transaction boundary here - handler runs OUTSIDE transaction
-```
-
-If the handler fails, the original change is already committed, leading to inconsistent state.
+1. **Transactional handlers** (e.g., cancelling orders when a user is deleted) must participate in the same transaction as the originating command — if the handler fails, the entire operation should roll back.
+2. **Side-effect handlers** (e.g., sending emails, updating search indices) must run *after* the transaction commits — they should not block or roll back the originating transaction, and must not execute inside a retryable transaction (Spanner retries would duplicate side effects).
 
 ### Solution
 
 ```
-  txScope.Execute() {
+  txScope.ExecuteWithPublish() {
       aggregate.BusinessMethod()   // Events collected internally
       repo.Save()                  // Same transaction
-      eventBus.Publish()           // Handlers execute immediately in same transaction
+      eventBus.Publish()           // Pre-commit handlers execute in same transaction
   } // COMMIT - all or nothing
+  // After commit:
+  eventBus.PublishPostCommit()     // Post-commit handlers run asynchronously
 ```
 
 ## Architecture
 
-The implementation combines three patterns:
+The implementation combines four patterns:
 
 1. **Context-collected Events**: Aggregates add domain events to a context-bound collector during business operations
-2. **Transaction-scoped Event Bus**: Events trigger handlers synchronously within a transaction
-3. **Context-based Transaction Propagation**: Transaction is embedded in context for repositories
+2. **Pre-commit Event Bus**: Events trigger handlers synchronously within a transaction
+3. **Post-commit Event Bus**: Events are dispatched to handlers after a successful commit
+4. **Context-based Transaction Propagation**: Transaction is embedded in context for repositories
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -42,17 +43,23 @@ The implementation combines three patterns:
 │  │                 │ ─────────────────► │                           │   │
 │  │  Delete(ctx)    │  (ctx collector)   │  Publish(ctx) drains      │   │
 │  └─────────────────┘                    │  collector, dispatches    │   │
-│         │                               │  handlers in parallel     │   │
+│         │                               │  pre-commit handlers      │   │
 │         │ Save()                        │            │              │   │
 │         ▼                               │            ▼              │   │
 │  ┌─────────────────┐                    │  ┌─────────────────────┐  │   │
-│  │  Repository     │◄───────────────────│  │  Handler A          │  │   │
+│  │  Repository     │◄───────────────────│  │  Pre-commit Handler │  │   │
 │  │  (TxFromCtx)    │                    │  │  (same ctx = tx)    │  │   │
 │  └─────────────────┘                    │  └─────────────────────┘  │   │
+│                                         └───────────────────────────┘   │
+│  ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ COMMIT ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─   │
+│                                         ┌───────────────────────────┐   │
+│                                         │  PublishPostCommit()      │   │
+│                                         │  (detached goroutine)     │   │
 │                                         │            │              │   │
 │                                         │            ▼              │   │
 │                                         │  ┌─────────────────────┐  │   │
-│                                         │  │  Handler B          │  │   │
+│                                         │  │ Post-commit Handler │  │   │
+│                                         │  │ (email, ES index)   │  │   │
 │                                         │  └─────────────────────┘  │   │
 │                                         └───────────────────────────┘   │
 └──────────────────────────────────────────────────────────────────────────┘
@@ -110,20 +117,43 @@ type ScopeWithDomainEvent interface {
 }
 
 // modules/shared/events/scope.go — factory and implementation
-func NewScopeWithDomainEvent(inner transaction.Scope, publisher Publisher) transaction.ScopeWithDomainEvent
+func NewScopeWithDomainEvent(inner transaction.Scope, publisher Publisher, postCommitPublisher PostCommitPublisher) transaction.ScopeWithDomainEvent
 ```
 
-The implementation:
+The implementation orchestrates two phases:
 
 ```go
 func (s *scopeWithDomainEventImpl) ExecuteWithPublish(ctx context.Context, fn func(ctx context.Context) error) error {
-    return s.inner.Execute(ctx, func(ctx context.Context) error {
-        ctx = events.NewContext(ctx)  // Fresh collector per invocation (Spanner retry safe)
+    var publishedEvents []Event
+
+    innerFn := func(ctx context.Context) error {
+        // Reset on each attempt (Execute may retry).
+        publishedEvents = nil
+        ctx = newContext(ctx)
         if err := fn(ctx); err != nil {
             return err
         }
-        return s.publisher.Publish(ctx)  // Publish after fn succeeds, before commit
-    })
+
+        // Phase 1: Pre-commit — drain and publish events inside the transaction.
+        for evts := collect(ctx); len(evts) > 0; evts = collect(ctx) {
+            if err := s.publisher.Publish(ctx, evts); err != nil {
+                return err
+            }
+            publishedEvents = append(publishedEvents, evts...)
+        }
+
+        return nil
+    }
+    err := s.inner.Execute(ctx, innerFn)
+    if err != nil {
+        return err
+    }
+
+    // Phase 2: Post-commit — fire handlers after successful commit.
+    if len(publishedEvents) > 0 && s.postCommitPublisher != nil {
+        s.postCommitPublisher.PublishPostCommit(ctx, publishedEvents)
+    }
+    return nil
 }
 ```
 
@@ -143,10 +173,16 @@ func (r *SpannerRepository) Save(ctx context.Context, user *domain.User) error {
 
 ### 5. EventBus
 
-Implements both `events.Publisher` and `events.Subscriber`. `Publish(ctx, evts)` dispatches events synchronously to registered handlers. The **drain loop** (collecting cascading events from handlers) lives in `ScopeWithDomainEvent.ExecuteWithPublish`, not in the EventBus itself:
+Implements four interfaces: `events.Publisher`, `events.Subscriber`, `events.PostCommitPublisher`, and `events.PostCommitSubscriber`.
+
+**Pre-commit**: `Publish(ctx, evts)` dispatches events synchronously to registered pre-commit handlers. The **drain loop** (collecting cascading events from handlers) lives in `ScopeWithDomainEvent.ExecuteWithPublish`, not in the EventBus itself.
+
+**Post-commit**: `PublishPostCommit(ctx, evts)` dispatches events to post-commit handlers asynchronously in a separate goroutine with a detached context (not cancelled when the caller's HTTP request completes). Errors are logged but not propagated.
 
 ```go
 // internal/platform/eventbus/eventbus.go
+
+// Pre-commit: synchronous, errors propagated (→ rollback)
 func (b *EventBus) Publish(ctx context.Context, evts []events.Event) error {
     for _, event := range evts {
         if err := b.processEvent(ctx, event); err != nil {
@@ -156,24 +192,18 @@ func (b *EventBus) Publish(ctx context.Context, evts []events.Event) error {
     return nil
 }
 
-// modules/shared/events/scope.go — drain loop lives here
-func (s *scopeWithDomainEventImpl) ExecuteWithPublish(ctx context.Context, fn func(ctx context.Context) error) error {
-    return s.inner.Execute(ctx, func(ctx context.Context) error {
-        ctx = newContext(ctx)
-        if err := fn(ctx); err != nil {
-            return err
+// Post-commit: asynchronous, errors logged only (best-effort)
+func (b *EventBus) PublishPostCommit(ctx context.Context, evts []events.Event) {
+    detachedCtx := detachContext(ctx) // carries trace span, not cancellation
+    go func() {
+        for _, event := range evts {
+            b.processPostCommitEvent(detachedCtx, event)
         }
-        for evts := collect(ctx); len(evts) > 0; evts = collect(ctx) {
-            if err := s.publisher.Publish(ctx, evts); err != nil {
-                return err
-            }
-        }
-        return nil
-    })
+    }()
 }
 ```
 
-Handlers for the same event type run in parallel (`errgroup`). Depth is tracked per-context (max 10 levels), so concurrent transactions are isolated and infinite loops are prevented.
+Pre-commit depth is tracked per-context (max 10 levels), so concurrent transactions are isolated and infinite loops are prevented.
 
 ### 6. Command Handler Integration
 
@@ -215,7 +245,7 @@ When using Cloud Spanner as the transactional store, several characteristics req
 
 Spanner's `ReadWriteTransaction` automatically retries the callback function on `Aborted` errors (e.g., lock contention). This has critical implications:
 
-**DO NOT** perform irreversible side effects inside event handlers:
+**DO NOT** perform irreversible side effects inside **pre-commit** event handlers:
 
 - Email/SMS sending
 - External API calls
@@ -224,9 +254,9 @@ Spanner's `ReadWriteTransaction` automatically retries the callback function on 
 
 These operations cannot be rolled back and will be duplicated on retry.
 
-**Event handlers within transactions should be limited to database operations only.**
+**Pre-commit event handlers should be limited to database operations only.**
 
-For external side effects (notifications, etc.), use a separate async pattern (Pub/Sub subscription) outside the transaction. See the `notifications` module for an example approach.
+For external side effects, use **post-commit handlers** via `SubscribePostCommit`. These run after the transaction commits successfully and are not subject to Spanner retries. See the `notifications` module (`OrderSubmittedHandler`) and the `users` module (`UserIndexer` for Elasticsearch sync) for examples.
 
 ### 2. Context-based Depth Tracking
 
@@ -270,9 +300,9 @@ If a handler publishes an event, its handlers execute immediately (nested). If t
 
 ## Event Handler Guidelines
 
-### Handlers Running Within Transactions
+### Pre-commit Handlers (Transactional)
 
-For handlers that participate in the originating transaction:
+For handlers that participate in the originating transaction. Registered via `Subscribe()`:
 
 ```go
 type UserDeletedHandler struct {
@@ -301,30 +331,33 @@ Key points:
 - Use repository directly (not through command handlers)
 - Pass `ctx` through — it contains both the transaction and the event collector
 - Return errors to trigger rollback
-- **No external API calls or side effects**
+- **No external API calls or side effects** (Spanner may retry)
 
-### Handlers Intended for Future Async Processing
+### Post-commit Handlers (After Transaction)
 
-Some handlers are designed to eventually run outside the transaction (e.g., sending emails). Currently, **all handlers run synchronously** within the same transaction via the in-process EventBus:
+For handlers that perform external side effects. Registered via `SubscribePostCommit()`. These run after the transaction commits successfully in a separate goroutine with a detached context:
 
 ```go
-// Currently runs in-process (same transaction context), but designed for future async migration
+// Runs AFTER the transaction commits — safe for external side effects
 type OrderSubmittedHandler struct {
-    logger *slog.Logger
+    sender *NotificationSender
 }
 
 func (h *OrderSubmittedHandler) Handle(ctx context.Context, event events.Event) error {
-    // Currently: avoid external side effects (handler may retry with the transaction)
-    h.logger.Info("sending confirmation email", slog.String("order_id", event.EventID()))
-    return nil
+    e, ok := event.(orderevents.OrderSubmittedEvent)
+    if !ok {
+        return fmt.Errorf("unexpected event type: %T", event)
+    }
+    return h.sender.SendOrderConfirmation(e.OrderID)
 }
 ```
 
-**Future migration path**: These handlers will move to Pub/Sub subscriptions where:
+Key points:
 
-- Events are published to a message queue after commit (via outbox pattern)
-- Handlers process asynchronously with idempotency (event ID deduplication)
-- External side effects (email, SMS) become safe
+- External side effects (email, search index, etc.) are safe — the transaction has already committed
+- Errors are logged but do not affect the caller (best-effort delivery)
+- Context is detached from the original HTTP request — not cancelled when the request completes
+- Handlers share the same `events.Handler` interface as pre-commit handlers; only the subscription method differs
 
 ## Migration Path to Outbox Pattern
 
@@ -335,8 +368,10 @@ The lightweight domain events pattern is designed to migrate smoothly to a full 
 ```
 Transaction {
     Save aggregate
-    TransactionalPublisher.Publish()  →  Handler executes in same tx
+    Publisher.Publish()               →  Pre-commit handlers execute in same tx
 }
+// After commit:
+PostCommitPublisher.PublishPostCommit()  →  Post-commit handlers (email, ES, etc.)
 ```
 
 ### Future (Outbox)
@@ -347,33 +382,37 @@ Transaction {
     OutboxPublisher.Publish()  →  Save events to outbox table
 }
 // Later: Change stream / polling reads outbox and publishes to Pub/Sub
+// Pub/Sub subscribers replace both pre-commit and post-commit handlers
 ```
 
 The migration requires:
 
-1. Replace `TransactionalPublisher` with `OutboxPublisher` implementation
+1. Replace `Publisher` with `OutboxPublisher` implementation
 2. Add outbox table and change stream / polling worker
 3. Update handlers for idempotency (event ID tracking)
+4. Migrate post-commit handlers to Pub/Sub subscribers
 
 **No changes required** in:
 
-- Aggregate event collection
-- Command handler structure
+- Aggregate event collection (`events.Add(ctx, event)`)
+- Command handler structure (`ExecuteWithPublish`)
 - TransactionScope usage
 
 ## Summary
 
-| Component                  | Responsibility                                       |
-| -------------------------- | ---------------------------------------------------- |
-| `events.Add(ctx, event)`   | Collect events during business operations            |
-| `transaction.Scope`        | Manage transaction lifecycle                         |
-| `ScopeWithDomainEvent`     | Initialize collector, execute fn, publish events     |
-| Context-embedded transaction | Enable repositories to join existing transactions  |
-| `EventBus`                 | Subscribe handlers and publish events synchronously  |
+| Component                    | Responsibility                                                       |
+| ---------------------------- | -------------------------------------------------------------------- |
+| `events.Add(ctx, event)`     | Collect events during business operations                            |
+| `transaction.Scope`          | Manage transaction lifecycle                                         |
+| `ScopeWithDomainEvent`       | Initialize collector, execute fn, publish pre-commit + post-commit   |
+| Context-embedded transaction | Enable repositories to join existing transactions                    |
+| `EventBus` (pre-commit)      | Subscribe and publish events synchronously inside the transaction    |
+| `EventBus` (post-commit)     | Subscribe and publish events asynchronously after successful commit  |
 
 This pattern achieves:
 
-- **Atomic consistency** across module boundaries
+- **Atomic consistency** across module boundaries (pre-commit handlers)
+- **Safe external side effects** after commit (post-commit handlers)
 - **Clean separation** between domain logic and infrastructure
 - **Testability** through interface-based design
-- **Migration path** to full event sourcing / outbox pattern
+- **Migration path** to full outbox pattern

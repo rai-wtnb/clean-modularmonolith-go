@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
 	"go.opentelemetry.io/otel"
@@ -31,7 +32,8 @@ type EventBus struct {
 	handlers           map[events.EventType][]events.Handler // pre-commit handlers
 	postCommitHandlers map[events.EventType][]events.Handler // post-commit handlers
 	logger             *slog.Logger
-	maxDepth           int // max depth of event processing.
+	maxDepth           int           // max depth of event processing.
+	postCommitTimeout  time.Duration // per-handler timeout for post-commit handlers.
 }
 
 var (
@@ -50,6 +52,7 @@ func NewEventBus(logger *slog.Logger) *EventBus {
 		postCommitHandlers: make(map[events.EventType][]events.Handler),
 		logger:             logger,
 		maxDepth:           10,
+		postCommitTimeout:  30 * time.Second,
 	}
 }
 
@@ -164,21 +167,59 @@ func (b *EventBus) PublishPostCommit(ctx context.Context, evts []events.Event) {
 func (b *EventBus) processPostCommitEvent(ctx context.Context, event events.Event) {
 	handlers := b.postCommitHandlersFor(event.EventType())
 
-	for handler := range slices.Values(handlers) {
-		spanName := fmt.Sprintf("event.handle.post-commit %s/%s", handler.Subdomain(), handler.HandlerName())
-		options := []trace.SpanStartOption{
-			trace.WithAttributes(attribute.String("event.type", event.EventType().String()), attribute.String("event.id", event.EventID()), attribute.String("event.handler", handler.HandlerName()), attribute.String("event.subdomain", handler.Subdomain())),
-		}
-		ctx, span := tracer.Start(ctx, spanName, options...)
+	var wg sync.WaitGroup
+	for _, handler := range handlers {
+		wg.Go(func() {
+			b.invokePostCommitHandler(ctx, event, handler)
+		})
+	}
+	wg.Wait()
+}
 
-		err := handler.Handle(ctx, event)
-		if err != nil {
+// invokePostCommitHandler executes a single post-commit handler with panic
+// recovery and tracing. Panics and errors are logged but not propagated.
+func (b *EventBus) invokePostCommitHandler(ctx context.Context, event events.Event, handler events.Handler) {
+	ctx, cancel := context.WithTimeout(ctx, b.postCommitTimeout)
+	defer cancel()
+
+	spanName := fmt.Sprintf("event.handle.post-commit %s/%s", handler.Subdomain(), handler.HandlerName())
+	options := []trace.SpanStartOption{
+		trace.WithAttributes(
+			attribute.String("event.type", event.EventType().String()),
+			attribute.String("event.id", event.EventID()),
+			attribute.String("event.handler", handler.HandlerName()),
+			attribute.String("event.subdomain", handler.Subdomain()),
+		),
+	}
+	ctx, span := tracer.Start(ctx, spanName, options...)
+	defer span.End()
+
+	defer func() {
+		if r := recover(); r != nil {
+			err := fmt.Errorf("panic in post-commit handler: %v", r)
 			span.RecordError(err)
 			span.SetStatus(codes.Error, err.Error())
-			b.logger.Error("post-commit handler failed", slog.String("handler", handler.HandlerName()), slog.String("subdomain", handler.Subdomain()), slog.String("event_type", event.EventType().String()), slog.String("event_id", event.EventID()), slog.Any("error", err))
+			b.logger.Error("post-commit handler panicked",
+				slog.String("handler", handler.HandlerName()),
+				slog.String("subdomain", handler.Subdomain()),
+				slog.String("event_type", event.EventType().String()),
+				slog.String("event_id", event.EventID()),
+				slog.Any("panic", r),
+			)
 		}
+	}()
 
-		span.End()
+	err := handler.Handle(ctx, event)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		b.logger.Error("post-commit handler failed",
+			slog.String("handler", handler.HandlerName()),
+			slog.String("subdomain", handler.Subdomain()),
+			slog.String("event_type", event.EventType().String()),
+			slog.String("event_id", event.EventID()),
+			slog.Any("error", err),
+		)
 	}
 }
 
