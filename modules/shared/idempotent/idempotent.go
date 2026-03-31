@@ -4,9 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
-
-	"github.com/jellydator/ttlcache/v3"
 )
 
 // defaultTTL is how long a deduplication entry is retained.
@@ -22,8 +21,9 @@ type hash string
 
 // entry stores per-key deduplication state.
 type entry struct {
-	hash   string
-	result any // nil for Once, typed value for OnceResult
+	hash      string
+	result    any // nil for Once, typed value for OnceResult
+	expiresAt time.Time
 }
 
 // OutboundCache provides deduplication for outbound calls to external
@@ -57,7 +57,9 @@ type entry struct {
 // Deduplication is in-memory, scoped to a single process instance and cleared
 // on restart. Entries expire after the configured TTL to bound memory growth.
 type OutboundCache struct {
-	cache *ttlcache.Cache[string, entry]
+	mu      sync.Mutex
+	entries map[string]entry
+	ttl     time.Duration
 }
 
 // NewOutboundCache creates an OutboundCache.
@@ -70,11 +72,64 @@ func NewOutboundCache(ttl ...time.Duration) (_ *OutboundCache, cleanup func()) {
 	if len(ttl) > 0 {
 		d = ttl[0]
 	}
-	c := ttlcache.New(
-		ttlcache.WithTTL[string, entry](d),
-	)
-	go c.Start()
-	return &OutboundCache{cache: c}, c.Stop
+	c := &OutboundCache{
+		entries: make(map[string]entry),
+		ttl:     d,
+	}
+	done := make(chan struct{})
+	go c.sweepLoop(d, done)
+	return c, func() { close(done) }
+}
+
+// sweepLoop periodically removes expired entries to bound memory growth.
+// Expired entries are also lazily removed on lookup, so this goroutine
+// only needs to catch entries that are never accessed again.
+func (c *OutboundCache) sweepLoop(interval time.Duration, done <-chan struct{}) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			now := time.Now()
+			c.mu.Lock()
+			for k, e := range c.entries {
+				if now.After(e.expiresAt) {
+					delete(c.entries, k)
+				}
+			}
+			c.mu.Unlock()
+		}
+	}
+}
+
+// lookup returns the cached entry for key if it exists, has not expired,
+// and (when h is non-empty) its stored hash matches h. Expired entries
+// are deleted on access so that subsequent calls see a clean miss.
+func (c *OutboundCache) lookup(key, h string) (entry, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.entries[key]
+	if !ok {
+		return entry{}, false
+	}
+	if time.Now().After(e.expiresAt) {
+		delete(c.entries, key)
+		return entry{}, false
+	}
+	if h != "" && e.hash != h {
+		return entry{}, false
+	}
+	return e, true
+}
+
+// store writes an entry into the cache with a fresh expiration timestamp.
+func (c *OutboundCache) store(key string, e entry) {
+	e.expiresAt = time.Now().Add(c.ttl)
+	c.mu.Lock()
+	c.entries[key] = e
+	c.mu.Unlock()
 }
 
 // HashInput computes a SHA-256 hex digest from the given values.
@@ -92,7 +147,7 @@ func NewOutboundCache(ttl ...time.Duration) (_ *OutboundCache, cleanup func()) {
 //     which may change the hash if the tag is added/removed.
 //   - Types implementing json.Marshaler use that custom encoding;
 //     ensure it is deterministic and lossless for hashing purposes.
-func (b *OutboundCache) HashInput(values ...any) hash {
+func (c *OutboundCache) HashInput(values ...any) hash {
 	data, err := json.Marshal(values)
 	if err != nil {
 		panic(fmt.Sprintf("idempotent.HashInput: unsupported type: %v", err))
@@ -102,19 +157,15 @@ func (b *OutboundCache) HashInput(values ...any) hash {
 }
 
 // execute is the shared deduplication logic for Once and OnceResult.
-func (b *OutboundCache) execute(operation, key string, fn func() (any, error), inputHash ...hash) (any, bool, error) {
+func (c *OutboundCache) execute(operation, key string, fn func() (any, error), inputHash ...hash) (any, bool, error) {
 	var h string
 	if len(inputHash) > 0 {
 		h = string(inputHash[0])
 	}
 
 	cacheKey := operation + ":" + key
-	if item := b.cache.Get(cacheKey); item != nil {
-		e := item.Value()
-		if h == "" || e.hash == h {
-			return e.result, true, nil // cache hit
-		}
-		// hash mismatch: input changed, fall through to execute
+	if e, ok := c.lookup(cacheKey, h); ok {
+		return e.result, true, nil
 	}
 
 	result, err := fn()
@@ -122,10 +173,7 @@ func (b *OutboundCache) execute(operation, key string, fn func() (any, error), i
 		return nil, false, err
 	}
 
-	b.cache.Set(cacheKey, entry{
-		hash:   h,
-		result: result,
-	}, ttlcache.DefaultTTL)
+	c.store(cacheKey, entry{hash: h, result: result})
 	return result, false, nil
 }
 
@@ -136,8 +184,8 @@ func (b *OutboundCache) execute(operation, key string, fn func() (any, error), i
 //     input changed, fn re-executes.
 //
 // fn is NOT cached on failure, so retries after errors will re-execute.
-func (b *OutboundCache) Once(operation, key string, fn func() error, inputHash ...hash) error {
-	_, _, err := b.execute(operation, key, func() (any, error) {
+func (c *OutboundCache) Once(operation, key string, fn func() error, inputHash ...hash) error {
+	_, _, err := c.execute(operation, key, func() (any, error) {
 		return nil, fn()
 	}, inputHash...)
 	return err
@@ -149,8 +197,8 @@ func (b *OutboundCache) Once(operation, key string, fn func() error, inputHash .
 //
 // Go does not allow generic methods, so this is a package-level function.
 // See Once for deduplication semantics.
-func OnceResult[T any](b *OutboundCache, operation, key string, fn func() (T, error), inputHash ...hash) (T, error) {
-	result, cached, err := b.execute(operation, key, func() (any, error) {
+func OnceResult[T any](c *OutboundCache, operation, key string, fn func() (T, error), inputHash ...hash) (T, error) {
+	result, cached, err := c.execute(operation, key, func() (any, error) {
 		return fn()
 	}, inputHash...)
 	if err != nil {
