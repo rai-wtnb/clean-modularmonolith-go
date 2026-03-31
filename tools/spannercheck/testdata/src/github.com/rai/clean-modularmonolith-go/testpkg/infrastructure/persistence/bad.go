@@ -2,12 +2,14 @@ package persistence
 
 import (
 	"context"
+	"log/slog"
 
 	"cloud.google.com/go/spanner"
 )
 
 type Repo struct {
 	client *spanner.Client
+	logger *slog.Logger
 }
 
 func (r *Repo) badApply(ctx context.Context) {

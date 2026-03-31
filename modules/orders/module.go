@@ -25,11 +25,12 @@ type Module interface {
 
 // Config holds the module configuration.
 type Config struct {
-	Repository       domain.OrderRepository
-	TransactionScope transaction.Scope
-	Publisher        events.Publisher
-	Subscriber       events.Subscriber
-	Logger           *slog.Logger
+	Repository          domain.OrderRepository
+	TransactionScope    transaction.Scope
+	Publisher           events.Publisher
+	PostCommitPublisher events.PostCommitPublisher
+	Subscriber          events.Subscriber
+	Logger              *slog.Logger
 }
 
 type module struct {
@@ -52,7 +53,7 @@ func New(cfg Config) Module {
 
 	// Wrap the transaction scope with ScopeWithDomainEvent that automatically
 	// collects domain events from context and publishes them after success.
-	txScope := events.NewScopeWithDomainEvent(cfg.TransactionScope, cfg.Publisher)
+	txScope := events.NewScopeWithDomainEvent(cfg.TransactionScope, cfg.Publisher, cfg.PostCommitPublisher)
 
 	createOrderHandler := commands.NewCreateOrderHandler(cfg.Repository, txScope)
 	addItemHandler := commands.NewAddItemHandler(cfg.Repository)

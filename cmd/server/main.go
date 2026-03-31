@@ -50,16 +50,16 @@ func main() {
 	defer spannerClient.Close()
 
 	// Initialize transaction scopes
-	txScope := spanner.NewReadWriteTransactionScope(spannerClient)
-	roTxScope := spanner.NewReadOnlyTransactionScope(spannerClient)
+	txScope := spanner.NewReadWriteTransactionScope(spannerClient, logger)
+	roTxScope := spanner.NewReadOnlyTransactionScope(spannerClient, logger)
 
 	// Initialize event bus (for inter-module communication)
 	// Implements both events.Publisher and events.Subscriber
 	eventBus := eventbus.NewEventBus(logger)
 
 	// Initialize repositories
-	usersRepo := userspersistence.NewSpannerRepository(spannerClient)
-	ordersRepo := orderspersistence.NewSpannerRepository(spannerClient)
+	usersRepo := userspersistence.NewSpannerRepository(spannerClient, logger)
+	ordersRepo := orderspersistence.NewSpannerRepository(spannerClient, logger)
 
 	// Initialize Elasticsearch client
 	esClient, err := newElasticsearchClient(logger)
@@ -75,7 +75,9 @@ func main() {
 		ReadWriteTransactionScope: txScope,
 		ReadOnlyTransactionScope:  roTxScope,
 		Publisher:                 eventBus,
+		PostCommitPublisher:       eventBus,
 		Subscriber:                eventBus,
+		PostCommitSubscriber:      eventBus,
 		ESClient:                  esClient,
 		Logger:                    logger,
 	}
@@ -85,19 +87,20 @@ func main() {
 	}
 
 	ordersCfg := orders.Config{
-		Repository:       ordersRepo,
-		TransactionScope: txScope,
-		Publisher:        eventBus,
-		Subscriber:       eventBus,
-		Logger:           logger,
+		Repository:          ordersRepo,
+		TransactionScope:    txScope,
+		Publisher:           eventBus,
+		PostCommitPublisher: eventBus,
+		Subscriber:          eventBus,
+		Logger:              logger,
 	}
 	ordersModule := orders.New(ordersCfg)
 
 	// Notifications module subscribes to events but runs outside transactions
 	// (external side effects like email should not be in DB transactions)
 	notificationCfg := notifications.Config{
-		EventSubscriber: eventBus,
-		Logger:          logger,
+		PostCommitEventSubscriber: eventBus,
+		Logger:                    logger,
 	}
 	_, notificationsCleanup := notifications.New(notificationCfg)
 	defer notificationsCleanup()

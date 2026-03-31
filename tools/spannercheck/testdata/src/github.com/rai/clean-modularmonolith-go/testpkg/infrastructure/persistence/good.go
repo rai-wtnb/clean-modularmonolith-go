@@ -10,21 +10,21 @@ import (
 // All of these should NOT trigger any diagnostics.
 
 func (r *Repo) goodWrite(ctx context.Context) {
-	platformspanner.Write(ctx, r.client, spanner.Statement{})
+	platformspanner.Write(ctx, r.client, r.logger, spanner.Statement{})
 }
 
 func (r *Repo) goodWriteMultiple(ctx context.Context) {
-	platformspanner.Write(ctx, r.client, spanner.Statement{}, spanner.Statement{})
+	platformspanner.Write(ctx, r.client, r.logger, spanner.Statement{}, spanner.Statement{})
 }
 
 func (r *Repo) goodRead(ctx context.Context) {
-	platformspanner.SingleRead(ctx, r.client, func(_ context.Context, _ interface{}) (interface{}, error) {
+	platformspanner.SingleRead(ctx, r.client, r.logger, func(_ context.Context, _ interface{}) (interface{}, error) {
 		return nil, nil
 	})
 }
 
 func (r *Repo) goodReadConsistent(ctx context.Context) {
-	platformspanner.ConsistentRead(ctx, r.client, func(_ context.Context, _ interface{}) (interface{}, error) {
+	platformspanner.ConsistentRead(ctx, r.client, r.logger, func(_ context.Context, _ interface{}) (interface{}, error) {
 		return nil, nil
 	})
 }

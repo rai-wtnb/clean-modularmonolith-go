@@ -11,8 +11,8 @@ import (
 type Module struct{}
 
 type Config struct {
-	EventSubscriber events.Subscriber
-	Logger          *slog.Logger
+	PostCommitEventSubscriber events.PostCommitSubscriber
+	Logger                    *slog.Logger
 }
 
 // New initializes the notification module and subscribes to events.
@@ -24,8 +24,8 @@ func New(cfg Config) (_ *Module, cleanup func()) {
 	sender, cleanup := eventhandlers.NewNotificationSender(logger)
 	orderSubmittedHandler := eventhandlers.NewOrderSubmittedHandler(sender)
 
-	// Subscribe to events
-	if err := cfg.EventSubscriber.Subscribe(orderSubmittedHandler.EventType(), orderSubmittedHandler); err != nil {
+	// Subscribe to events (post-commit: exterSubscribePostCommitnal side effects like email should not be in DB transactions)
+	if err := cfg.PostCommitEventSubscriber.SubscribePostCommit(orderSubmittedHandler.EventType(), orderSubmittedHandler); err != nil {
 		logger.Error("failed to subscribe to order submitted event", slog.Any("error", err))
 		// specific error handling strategy (panic vs log) depends on requirements
 	}

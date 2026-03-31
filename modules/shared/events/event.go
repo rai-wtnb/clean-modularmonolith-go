@@ -77,7 +77,19 @@ type Handler interface {
 	EventType() EventType
 }
 
-// Subscriber subscribes to domain events.
+// Subscriber subscribes handlers that run INSIDE the transaction boundary (pre-commit).
 type Subscriber interface {
 	Subscribe(eventType EventType, handler Handler) error
+}
+
+// PostCommitSubscriber subscribes handlers that run AFTER the transaction commits successfully.
+// Post-commit handler failures are logged but do not affect the caller.
+type PostCommitSubscriber interface {
+	SubscribePostCommit(eventType EventType, handler Handler) error
+}
+
+// PostCommitPublisher dispatches events to post-commit handlers after the transaction commits.
+// Errors from handlers are logged but not returned (best-effort delivery).
+type PostCommitPublisher interface {
+	PublishPostCommit(ctx context.Context, events []Event)
 }

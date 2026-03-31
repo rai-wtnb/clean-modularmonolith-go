@@ -31,7 +31,9 @@ type Config struct {
 	ReadWriteTransactionScope transaction.Scope
 	ReadOnlyTransactionScope  transaction.Scope
 	Publisher                 events.Publisher
+	PostCommitPublisher       events.PostCommitPublisher
 	Subscriber                events.Subscriber
+	PostCommitSubscriber      events.PostCommitSubscriber
 	ESClient                  elasticsearch.Client
 	Logger                    *slog.Logger
 }
@@ -57,7 +59,7 @@ func New(cfg Config) (_ Module, cleanup func()) {
 
 	// Wrap the transaction scope with ScopeWithDomainEvent that automatically
 	// collects domain events from context and publishes them after success.
-	txScope := events.NewScopeWithDomainEvent(cfg.ReadWriteTransactionScope, cfg.Publisher)
+	txScope := events.NewScopeWithDomainEvent(cfg.ReadWriteTransactionScope, cfg.Publisher, cfg.PostCommitPublisher)
 
 	// Wire up command handlers (no publisher needed — ScopeWithDomainEvent handles it)
 	createUserHandler := commands.NewCreateUserHandler(cfg.Repository, txScope)
@@ -69,8 +71,8 @@ func New(cfg Config) (_ Module, cleanup func()) {
 	listUsersHandler := queries.NewListUsersHandler(cfg.Repository, cfg.ReadOnlyTransactionScope)
 	searchUsersHandler := queries.NewSearchUsersHandler(cfg.ESClient)
 
-	// Subscribe to domain events for Elasticsearch sync
-	if cfg.Subscriber != nil && cfg.ESClient != nil {
+	// Subscribe to domain events for Elasticsearch sync (post-commit: external side effects)
+	if cfg.PostCommitSubscriber != nil && cfg.ESClient != nil {
 		var indexer *eventhandlers.UserIndexer
 		indexer, cleanup = eventhandlers.NewUserIndexer(cfg.ESClient, logger)
 		handlers := []events.Handler{
@@ -79,7 +81,7 @@ func New(cfg Config) (_ Module, cleanup func()) {
 			eventhandlers.NewUserDeletedHandler(indexer),
 		}
 		for _, h := range handlers {
-			if err := cfg.Subscriber.Subscribe(h.EventType(), h); err != nil {
+			if err := cfg.PostCommitSubscriber.SubscribePostCommit(h.EventType(), h); err != nil {
 				logger.Error("failed to subscribe to event",
 					slog.String("event_type", h.EventType().String()),
 					slog.Any("error", err),

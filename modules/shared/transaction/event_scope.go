@@ -15,16 +15,21 @@ import "context"
 // which encapsulates the event collection mechanism.
 type ScopeWithDomainEvent interface {
 	// ExecuteWithPublish runs fn within a transaction, collects domain events,
-	// and publishes them before the transaction commits.
+	// and publishes them in two phases:
 	//
-	// Publishing is intentionally inside the transaction boundary: if publishing
-	// fails (e.g. a handler returns an error), the transaction is rolled back,
-	// preserving strong consistency between the write and its side effects.
-	// This relies on the in-process event bus; once handlers are migrated to
-	// Pub/Sub the atomicity guarantee must be provided by an outbox pattern instead.
+	// 1. Pre-commit: Events are published inside the transaction boundary.
+	//    If a handler returns an error, the transaction is rolled back,
+	//    preserving strong consistency between the write and its side effects.
+	//    This relies on the in-process event bus; once handlers are migrated to
+	//    Pub/Sub the atomicity guarantee must be provided by an outbox pattern instead.
+	//
+	// 2. Post-commit: After the transaction commits successfully, events are
+	//    dispatched to post-commit handlers (e.g. sending notifications,
+	//    updating search indices). Post-commit handler failures are logged
+	//    but do not affect the caller — delivery is best-effort.
 	//
 	// NOTE: The underlying transaction may be retried (e.g. Spanner Aborted),
-	// so fn — and therefore all subscribed handlers — can be invoked more than
+	// so fn — and therefore all pre-commit handlers — can be invoked more than
 	// once per logical request. Handlers must account for this; see
 	// idempotent.Base for guidance.
 	ExecuteWithPublish(ctx context.Context, fn func(ctx context.Context) error) error

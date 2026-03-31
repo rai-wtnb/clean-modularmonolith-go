@@ -4,6 +4,7 @@ package persistence
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"cloud.google.com/go/spanner"
@@ -17,11 +18,12 @@ import (
 // SpannerRepository implements UserRepository using Cloud Spanner.
 type SpannerRepository struct {
 	client *spanner.Client
+	logger *slog.Logger
 }
 
 // NewSpannerRepository creates a new Spanner-backed user repository.
-func NewSpannerRepository(client *spanner.Client) *SpannerRepository {
-	return &SpannerRepository{client: client}
+func NewSpannerRepository(client *spanner.Client, logger *slog.Logger) *SpannerRepository {
+	return &SpannerRepository{client: client, logger: logger}
 }
 
 // Compile-time interface check.
@@ -42,14 +44,14 @@ func (r *SpannerRepository) Save(ctx context.Context, user *domain.User) error {
 		},
 	}
 
-	if err := platformspanner.Write(ctx, r.client, stmt); err != nil {
+	if err := platformspanner.Write(ctx, r.client, r.logger, stmt); err != nil {
 		return fmt.Errorf("failed to save user: %w", err)
 	}
 	return nil
 }
 
 func (r *SpannerRepository) FindByID(ctx context.Context, id domain.UserID) (*domain.User, error) {
-	return platformspanner.SingleRead(ctx, r.client, func(ctx context.Context, rtx platformspanner.ReadTransaction) (*domain.User, error) {
+	return platformspanner.SingleRead(ctx, r.client, r.logger, func(ctx context.Context, rtx platformspanner.ReadTransaction) (*domain.User, error) {
 		row, err := rtx.ReadRow(ctx, "Users",
 			spanner.Key{id.String()},
 			[]string{"UserID", "Email", "FirstName", "LastName", "Status", "CreatedAt", "UpdatedAt"},
@@ -66,7 +68,7 @@ func (r *SpannerRepository) FindByID(ctx context.Context, id domain.UserID) (*do
 }
 
 func (r *SpannerRepository) FindByEmail(ctx context.Context, email domain.Email) (*domain.User, error) {
-	return platformspanner.SingleRead(ctx, r.client, func(ctx context.Context, rtx platformspanner.ReadTransaction) (*domain.User, error) {
+	return platformspanner.SingleRead(ctx, r.client, r.logger, func(ctx context.Context, rtx platformspanner.ReadTransaction) (*domain.User, error) {
 		stmt := spanner.Statement{
 			SQL: `SELECT UserID, Email, FirstName, LastName, Status, CreatedAt, UpdatedAt
 			      FROM Users@{FORCE_INDEX=UsersByEmail}
@@ -91,7 +93,7 @@ func (r *SpannerRepository) FindByEmail(ctx context.Context, email domain.Email)
 }
 
 func (r *SpannerRepository) Exists(ctx context.Context, email domain.Email) (bool, error) {
-	return platformspanner.SingleRead(ctx, r.client, func(ctx context.Context, rtx platformspanner.ReadTransaction) (bool, error) {
+	return platformspanner.SingleRead(ctx, r.client, r.logger, func(ctx context.Context, rtx platformspanner.ReadTransaction) (bool, error) {
 		stmt := spanner.Statement{
 			SQL:    `SELECT 1 FROM Users@{FORCE_INDEX=UsersByEmail} WHERE Email = @email LIMIT 1`,
 			Params: map[string]interface{}{"email": email.String()},
@@ -113,7 +115,7 @@ func (r *SpannerRepository) Exists(ctx context.Context, email domain.Email) (boo
 
 func (r *SpannerRepository) FindAll(ctx context.Context, offset, limit int) ([]*domain.User, int, error) {
 	var total int
-	users, err := platformspanner.ConsistentRead(ctx, r.client, func(ctx context.Context, rtx platformspanner.ReadTransaction) ([]*domain.User, error) {
+	users, err := platformspanner.ConsistentRead(ctx, r.client, r.logger, func(ctx context.Context, rtx platformspanner.ReadTransaction) ([]*domain.User, error) {
 		// Get total count
 		countStmt := spanner.Statement{
 			SQL: `SELECT COUNT(*) FROM Users WHERE Status != 'deleted'`,
