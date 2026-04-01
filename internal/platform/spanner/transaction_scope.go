@@ -3,7 +3,6 @@ package spanner
 import (
 	"context"
 	"log/slog"
-	"runtime"
 	"time"
 
 	"cloud.google.com/go/spanner"
@@ -32,15 +31,11 @@ func NewReadWriteTransactionScope(client *spanner.Client, logger *slog.Logger) *
 //   - fn must NOT perform external side effects (email, API calls, etc.)
 //   - Any state (like TransactionalPublisher) should be created inside fn
 func (s *ReadWriteTransactionScope) Execute(ctx context.Context, fn func(ctx context.Context) error) error {
-	_, file, line, _ := runtime.Caller(1)
-	caller := slog.Group("caller", slog.String("file", file), slog.Int("line", line))
-
 	if _, ok := readWriteTxFromContext(ctx); ok {
-		s.logger.DebugContext(ctx, "joining existing read-write transaction", caller)
 		return fn(ctx)
 	}
 
-	s.logger.DebugContext(ctx, "transaction starting", slog.String("type", "read-write"), caller)
+	s.logger.DebugContext(ctx, "transaction starting", slog.String("type", "read-write"))
 	start := time.Now()
 
 	_, err := s.client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *spanner.ReadWriteTransaction) error {
@@ -53,9 +48,14 @@ func (s *ReadWriteTransactionScope) Execute(ctx context.Context, fn func(ctx con
 
 	duration := time.Since(start)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "transaction rolled back", slog.String("type", "read-write"), slog.Duration("duration", duration), slog.Any("error", err), caller)
+		s.logger.ErrorContext(ctx, "transaction rolled back",
+			slog.String("type", "read-write"),
+			slog.Duration("duration", duration),
+			slog.Any("error", err))
 	} else {
-		s.logger.DebugContext(ctx, "transaction committed", slog.String("type", "read-write"), slog.Duration("duration", duration), caller)
+		s.logger.DebugContext(ctx, "transaction committed",
+			slog.String("type", "read-write"),
+			slog.Duration("duration", duration))
 	}
 	return err
 }
@@ -78,15 +78,11 @@ func NewReadOnlyTransactionScope(client *spanner.Client, logger *slog.Logger) *R
 // The ctx passed to fn contains the transaction for repositories to use via SingleRead/ConsistentRead.
 // The transaction is closed automatically when Execute returns.
 func (s *ReadOnlyTransactionScope) Execute(ctx context.Context, fn func(ctx context.Context) error) error {
-	_, file, line, _ := runtime.Caller(1)
-	caller := slog.Group("caller", slog.String("file", file), slog.Int("line", line))
-
 	if _, ok := readTransactionFromContext(ctx); ok {
-		s.logger.DebugContext(ctx, "joining existing read transaction", caller)
 		return fn(ctx)
 	}
 
-	s.logger.DebugContext(ctx, "transaction starting", slog.String("type", "read-only"), caller)
+	s.logger.DebugContext(ctx, "transaction starting", slog.String("type", "read-only"))
 	start := time.Now()
 
 	tx := s.client.ReadOnlyTransaction()
@@ -94,17 +90,24 @@ func (s *ReadOnlyTransactionScope) Execute(ctx context.Context, fn func(ctx cont
 
 	txCtx, err := withReadOnlyTx(ctx, tx)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "transaction setup failed", slog.String("type", "read-only"), slog.Any("error", err), caller)
+		s.logger.ErrorContext(ctx, "transaction setup failed",
+			slog.String("type", "read-only"),
+			slog.Any("error", err))
 		return err
 	}
 
 	err = fn(txCtx)
-	duration := time.Since(start)
 
+	duration := time.Since(start)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "transaction failed", slog.String("type", "read-only"), slog.Duration("duration", duration), slog.Any("error", err), caller)
+		s.logger.ErrorContext(ctx, "transaction failed",
+			slog.String("type", "read-only"),
+			slog.Duration("duration", duration),
+			slog.Any("error", err))
 	} else {
-		s.logger.DebugContext(ctx, "transaction closed", slog.String("type", "read-only"), slog.Duration("duration", duration), caller)
+		s.logger.DebugContext(ctx, "transaction closed",
+			slog.String("type", "read-only"),
+			slog.Duration("duration", duration))
 	}
 	return err
 }

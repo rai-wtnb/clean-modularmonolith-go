@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"runtime"
-	"time"
 
 	"cloud.google.com/go/spanner"
 )
@@ -40,21 +39,14 @@ func Write(ctx context.Context, client *spanner.Client, logger *slog.Logger, stm
 	}
 
 	_, file, line, _ := runtime.Caller(1)
-	caller := slog.Group("caller", slog.String("file", file), slog.Int("line", line))
-
-	logger.DebugContext(ctx, "transaction starting", slog.String("type", "read-write"), slog.String("op", "Write"), caller)
-	start := time.Now()
+	finishLog := txLog(ctx, logger, file, line,
+		"transaction committed", "transaction rolled back",
+		slog.String("type", "read-write"), slog.String("op", "Write"))
 
 	_, err := client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
 		return exec(ctx, txn)
 	})
-
-	duration := time.Since(start)
-	if err != nil {
-		logger.ErrorContext(ctx, "transaction rolled back", slog.String("type", "read-write"), slog.String("op", "Write"), slog.Duration("duration", duration), slog.Any("error", err), caller)
-	} else {
-		logger.DebugContext(ctx, "transaction committed", slog.String("type", "read-write"), slog.String("op", "Write"), slog.Duration("duration", duration), caller)
-	}
+	finishLog(err)
 	return err
 }
 
@@ -67,19 +59,12 @@ func SingleRead[T any](ctx context.Context, client *spanner.Client, logger *slog
 	}
 
 	_, file, line, _ := runtime.Caller(1)
-	caller := slog.Group("caller", slog.String("file", file), slog.Int("line", line))
-
-	logger.DebugContext(ctx, "transaction starting", slog.String("type", "single-read"), slog.String("op", "SingleRead"), caller)
-	start := time.Now()
+	done := txLog(ctx, logger, file, line,
+		"transaction closed", "transaction failed",
+		slog.String("type", "single-read"), slog.String("op", "SingleRead"))
 
 	result, err := fn(ctx, client.Single())
-
-	duration := time.Since(start)
-	if err != nil {
-		logger.ErrorContext(ctx, "transaction failed", slog.String("type", "single-read"), slog.String("op", "SingleRead"), slog.Duration("duration", duration), slog.Any("error", err), caller)
-	} else {
-		logger.DebugContext(ctx, "transaction closed", slog.String("type", "single-read"), slog.String("op", "SingleRead"), slog.Duration("duration", duration), caller)
-	}
+	done(err)
 	return result, err
 }
 
@@ -93,21 +78,14 @@ func ConsistentRead[T any](ctx context.Context, client *spanner.Client, logger *
 	}
 
 	_, file, line, _ := runtime.Caller(1)
-	caller := slog.Group("caller", slog.String("file", file), slog.Int("line", line))
-
-	logger.DebugContext(ctx, "transaction starting", slog.String("type", "read-only"), slog.String("op", "ConsistentRead"), caller)
-	start := time.Now()
+	done := txLog(ctx, logger, file, line,
+		"transaction closed", "transaction failed",
+		slog.String("type", "read-only"), slog.String("op", "ConsistentRead"))
 
 	roTx := client.ReadOnlyTransaction()
 	defer roTx.Close()
 
 	result, err := fn(ctx, roTx)
-
-	duration := time.Since(start)
-	if err != nil {
-		logger.ErrorContext(ctx, "transaction failed", slog.String("type", "read-only"), slog.String("op", "ConsistentRead"), slog.Duration("duration", duration), slog.Any("error", err), caller)
-	} else {
-		logger.DebugContext(ctx, "transaction closed", slog.String("type", "read-only"), slog.String("op", "ConsistentRead"), slog.Duration("duration", duration), caller)
-	}
+	done(err)
 	return result, err
 }
