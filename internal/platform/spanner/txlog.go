@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"go.opentelemetry.io/otel/trace"
 )
 
 // businessCaller walks the call stack and returns the first frame outside
@@ -68,6 +70,10 @@ func txLog(ctx context.Context, logger *slog.Logger, txType transactionType, op 
 		slog.String("transaction_type", string(txType)),
 		slog.String("op", op),
 		caller,
+	}
+
+	if traceID := trace.SpanContextFromContext(ctx).TraceID(); traceID.IsValid() {
+		args = append(args, slog.String("trace_id", traceID.String()))
 	}
 
 	logger.InfoContext(ctx, "transaction starting", args...)
