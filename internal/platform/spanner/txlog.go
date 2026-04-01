@@ -2,6 +2,8 @@ package spanner
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"runtime"
@@ -56,8 +58,13 @@ const (
 // It uses businessCaller() to find the first frame outside infrastructure packages,
 // so it works correctly from both Scope.Execute and standalone functions (Write/SingleRead/ConsistentRead).
 func txLog(ctx context.Context, logger *slog.Logger, txType transactionType, op string) (finishLog func(error)) {
+	var b [4]byte
+	_, _ = rand.Read(b[:])
+	txID := hex.EncodeToString(b[:])
+
 	caller := businessCaller()
 	args := []any{
+		slog.String("tx_id", txID),
 		slog.String("transaction_type", string(txType)),
 		slog.String("op", op),
 		caller,
