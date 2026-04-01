@@ -1,4 +1,4 @@
-.PHONY: workspace build run test test-coverage lint check clean tidy deps-check deps-update sync vulncheck deps-graph deps-svg help
+.PHONY: workspace build run test test-coverage lint check clean tidy deps-check deps-update sync vulncheck deps-graph deps-svg help up down run-local
 
 # Module paths
 MODULES := cmd/server modules/shared modules/users modules/orders modules/notifications internal/platform
@@ -119,6 +119,21 @@ deps-svg:
 	@command -v dot >/dev/null 2>&1 || { echo "Error: graphviz not installed. Run: brew install graphviz"; exit 1; }
 	goda graph "github.com/rai/clean-modularmonolith-go/..." | dot -Tsvg -o docs/deps.svg
 	@echo "Generated docs/deps.svg"
+
+## up: Start local infrastructure (Spanner emulator + Elasticsearch)
+up:
+	docker compose up -d
+	@echo "Waiting for spanner-init to complete..."
+	@docker compose wait spanner-init 2>/dev/null || docker compose logs -f spanner-init &
+	@echo "Infrastructure ready. Run 'make run-local' to start the server."
+
+## down: Stop local infrastructure
+down:
+	docker compose down
+
+## run-local: Build and run the server with local .env
+run-local: build
+	@set -a && . ./.env && set +a && ./bin/server
 
 ## clean: Remove build artifacts
 clean:

@@ -1,0 +1,49 @@
+services:
+  spanner-emulator:
+    image: gcr.io/cloud-spanner-emulator/emulator:latest
+    ports:
+      - "9010:9010"  # gRPC
+      - "9020:9020"  # REST
+
+  spanner-init:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim
+    depends_on:
+      - spanner-emulator
+    restart: "no"
+    environment:
+      SPANNER_EMULATOR_HOST: spanner-emulator:9010
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        echo "Waiting for emulator..."
+        sleep 3
+
+        gcloud config configurations create emulator 2>/dev/null || true
+        gcloud config set auth/disable_credentials true
+        gcloud config set project local-project
+        gcloud config set api_endpoint_overrides/spanner http://spanner-emulator:9020/
+
+        echo "Creating instance..."
+        gcloud spanner instances create local-instance \
+          --config=emulator-config \
+          --description="Local dev" \
+          --nodes=1
+
+        echo "Creating database with schema..."
+        gcloud spanner databases create app-db \
+          --instance=local-instance \
+          --ddl-file=/schema/schema.sql
+
+        echo "Spanner emulator ready."
+
+    volumes:
+      - ./schema:/schema:ro
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+    ports:
+      - "9200:9200"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
