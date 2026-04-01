@@ -3,7 +3,6 @@ package spanner
 import (
 	"context"
 	"log/slog"
-	"time"
 
 	"cloud.google.com/go/spanner"
 )
@@ -35,8 +34,7 @@ func (s *ReadWriteTransactionScope) Execute(ctx context.Context, fn func(ctx con
 		return fn(ctx)
 	}
 
-	s.logger.DebugContext(ctx, "transaction starting", slog.String("type", "read-write"))
-	start := time.Now()
+	finishLog := txLog(ctx, s.logger, TxReadWrite, "ReadWriteScope")
 
 	_, err := s.client.ReadWriteTransaction(ctx, func(ctx context.Context, tx *spanner.ReadWriteTransaction) error {
 		txCtx, err := withReadWriteTx(ctx, tx)
@@ -45,18 +43,7 @@ func (s *ReadWriteTransactionScope) Execute(ctx context.Context, fn func(ctx con
 		}
 		return fn(txCtx)
 	})
-
-	duration := time.Since(start)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "transaction rolled back",
-			slog.String("type", "read-write"),
-			slog.Duration("duration", duration),
-			slog.Any("error", err))
-	} else {
-		s.logger.DebugContext(ctx, "transaction committed",
-			slog.String("type", "read-write"),
-			slog.Duration("duration", duration))
-	}
+	finishLog(err)
 	return err
 }
 
@@ -82,32 +69,18 @@ func (s *ReadOnlyTransactionScope) Execute(ctx context.Context, fn func(ctx cont
 		return fn(ctx)
 	}
 
-	s.logger.DebugContext(ctx, "transaction starting", slog.String("type", "read-only"))
-	start := time.Now()
+	finishLog := txLog(ctx, s.logger, TxReadOnly, "ReadOnlyScope")
 
 	tx := s.client.ReadOnlyTransaction()
 	defer tx.Close()
 
 	txCtx, err := withReadOnlyTx(ctx, tx)
 	if err != nil {
-		s.logger.ErrorContext(ctx, "transaction setup failed",
-			slog.String("type", "read-only"),
-			slog.Any("error", err))
+		finishLog(err)
 		return err
 	}
 
 	err = fn(txCtx)
-
-	duration := time.Since(start)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "transaction failed",
-			slog.String("type", "read-only"),
-			slog.Duration("duration", duration),
-			slog.Any("error", err))
-	} else {
-		s.logger.DebugContext(ctx, "transaction closed",
-			slog.String("type", "read-only"),
-			slog.Duration("duration", duration))
-	}
+	finishLog(err)
 	return err
 }

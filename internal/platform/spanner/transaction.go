@@ -3,7 +3,6 @@ package spanner
 import (
 	"context"
 	"log/slog"
-	"runtime"
 
 	"cloud.google.com/go/spanner"
 )
@@ -38,10 +37,7 @@ func Write(ctx context.Context, client *spanner.Client, logger *slog.Logger, stm
 		panic("spanner.Write: cannot write within a read-only transaction scope")
 	}
 
-	_, file, line, _ := runtime.Caller(1)
-	finishLog := txLog(ctx, logger, file, line,
-		"transaction committed", "transaction rolled back",
-		slog.String("type", "read-write"), slog.String("op", "Write"))
+	finishLog := txLog(ctx, logger, TxReadWrite, "Write")
 
 	_, err := client.ReadWriteTransaction(ctx, func(ctx context.Context, txn *spanner.ReadWriteTransaction) error {
 		return exec(ctx, txn)
@@ -58,13 +54,10 @@ func SingleRead[T any](ctx context.Context, client *spanner.Client, logger *slog
 		return fn(ctx, rtx)
 	}
 
-	_, file, line, _ := runtime.Caller(1)
-	done := txLog(ctx, logger, file, line,
-		"transaction closed", "transaction failed",
-		slog.String("type", "single-read"), slog.String("op", "SingleRead"))
+	finishLog := txLog(ctx, logger, TxSingleRead, "SingleRead")
 
 	result, err := fn(ctx, client.Single())
-	done(err)
+	finishLog(err)
 	return result, err
 }
 
@@ -77,15 +70,12 @@ func ConsistentRead[T any](ctx context.Context, client *spanner.Client, logger *
 		return fn(ctx, rtx)
 	}
 
-	_, file, line, _ := runtime.Caller(1)
-	done := txLog(ctx, logger, file, line,
-		"transaction closed", "transaction failed",
-		slog.String("type", "read-only"), slog.String("op", "ConsistentRead"))
+	finishLog := txLog(ctx, logger, TxReadOnly, "ConsistentRead")
 
 	roTx := client.ReadOnlyTransaction()
 	defer roTx.Close()
 
 	result, err := fn(ctx, roTx)
-	done(err)
+	finishLog(err)
 	return result, err
 }
