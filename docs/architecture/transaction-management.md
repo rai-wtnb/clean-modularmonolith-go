@@ -70,19 +70,25 @@ Extraction functions:
 | Function | Checks | Used by |
 |----------|--------|---------|
 | `readWriteTxFromContext` | RW key only | `Write` |
-| `readOnlyTxFromContext` | RO key only | `Write` (guard) |
+| `readOnlyTxFromContext` | RO key only | `Write` (guard), `ReadWriteTransactionScope` (guard) |
 | `readTransactionFromContext` | RW first, then RO | `SingleRead`, `ConsistentRead` |
 
 `readTransactionFromContext` checks RW before RO so that reads within a write transaction get read-your-writes consistency.
 
 ### Nesting Prevention
 
-Cloud Spanner does not support nested transactions. `withReadWriteTx` and `withReadOnlyTx` return `ErrNestedTransaction` if any transaction already exists in the context. Scope implementations handle this by joining the existing transaction instead of creating a new one:
+Cloud Spanner does not support nested transactions. `withReadWriteTx` and `withReadOnlyTx` return `ErrNestedTransaction` if any transaction already exists in the context. Scope implementations enforce this at two levels:
+
+1. **Early guard**: `ReadWriteTransactionScope.Execute` checks for an existing RO tx before starting a Spanner round-trip, returning `ErrNestedTransaction` immediately.
+2. **Safety net**: `withReadWriteTx` / `withReadOnlyTx` check again inside the Spanner callback as a defense-in-depth measure.
 
 ```go
 func (s *ReadWriteTransactionScope) Execute(ctx context.Context, fn func(ctx context.Context) error) error {
     if _, ok := readWriteTxFromContext(ctx); ok {
-        return fn(ctx) // Join existing transaction
+        return fn(ctx) // Join existing RW transaction
+    }
+    if _, ok := readOnlyTxFromContext(ctx); ok {
+        return ErrNestedTransaction // Cannot nest RW inside RO
     }
     // ... create new transaction
 }

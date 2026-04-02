@@ -22,6 +22,8 @@ func NewReadWriteTransactionScope(client *spanner.Client, logger *slog.Logger) *
 // Execute runs fn within a Spanner ReadWriteTransaction.
 // If a ReadWriteTransaction already exists in ctx, fn joins that transaction
 // instead of creating a new one (REQUIRED propagation semantics).
+// Returns ErrNestedTransaction if a ReadOnlyTransaction is active in ctx,
+// since Cloud Spanner does not support nested transactions.
 // The transaction is committed if fn returns nil, rolled back otherwise.
 // The ctx passed to fn contains the transaction for repositories to use via Write/SingleRead/ConsistentRead.
 //
@@ -32,6 +34,9 @@ func NewReadWriteTransactionScope(client *spanner.Client, logger *slog.Logger) *
 func (s *ReadWriteTransactionScope) Execute(ctx context.Context, fn func(ctx context.Context) error) error {
 	if _, ok := readWriteTxFromContext(ctx); ok {
 		return fn(ctx)
+	}
+	if _, ok := readOnlyTxFromContext(ctx); ok {
+		return ErrNestedTransaction
 	}
 
 	finishLog := txLog(ctx, s.logger, TxReadWrite, "ReadWriteScope")
