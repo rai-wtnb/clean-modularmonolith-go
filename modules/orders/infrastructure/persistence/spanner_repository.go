@@ -70,7 +70,7 @@ func (r *SpannerRepository) Save(ctx context.Context, order *domain.Order) error
 		})
 	}
 
-	if err := platformspanner.Write(ctx, r.client, r.logger, stmts...); err != nil {
+	if err := platformspanner.Write(ctx, stmts...); err != nil {
 		return fmt.Errorf("failed to save order: %w", err)
 	}
 	return nil
@@ -210,7 +210,7 @@ func (r *SpannerRepository) FindByUserRef(ctx context.Context, userRef domain.Us
 }
 
 func (r *SpannerRepository) Delete(ctx context.Context, id domain.OrderID) error {
-	if err := platformspanner.Write(ctx, r.client, r.logger, spanner.Statement{
+	if err := platformspanner.Write(ctx, spanner.Statement{
 		SQL:    `DELETE FROM Orders WHERE OrderID = @orderID`,
 		Params: map[string]interface{}{"orderID": id.String()},
 	}); err != nil {

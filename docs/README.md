@@ -22,6 +22,7 @@ High-level architecture documentation describing system structure and design dec
 | Document | Description |
 |----------|-------------|
 | [domain-events.md](architecture/domain-events.md) | Domain event flow between modules |
+| [transaction-management.md](architecture/transaction-management.md) | Transaction propagation, scope requirements, and data-access helper semantics |
 
 ### [rules/](rules/)
 

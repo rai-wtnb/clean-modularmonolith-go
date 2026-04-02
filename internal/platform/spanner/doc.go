@@ -2,11 +2,13 @@
 //
 // # Transaction Propagation
 //
-// All data-access helpers in this package (Write, SingleRead, ConsistentRead)
-// use REQUIRED propagation semantics:
+// Write requires a read-write transaction in the context (join-only).
+// If no transaction is active, Write returns an error — all writes must
+// go through a ReadWriteTransactionScope.
 //
-//   - If a transaction already exists in the context, the helper joins it.
-//   - If no transaction exists, the helper creates a new standalone transaction.
+// SingleRead and ConsistentRead use REQUIRED propagation: they join an
+// existing transaction if one is active, or create a standalone transaction
+// otherwise.
 //
 // Transactions are placed into the context by TransactionScope implementations
 // (ReadWriteTransactionScope, ReadOnlyTransactionScope). Application-layer
@@ -14,14 +16,10 @@
 // embeds it in the context. Repository methods then call Write/SingleRead/
 // ConsistentRead, which transparently join that transaction.
 //
-// When a repository method is called outside a scope (e.g., in tests or
-// one-off scripts), the helpers create a short-lived transaction automatically.
-//
 // # Choosing a Helper
 //
 //   - Write:          DML statements (INSERT, UPDATE, DELETE). Requires a
-//     read-write transaction. Panics if called inside a
-//     read-only scope.
+//     read-write transaction in context. Returns an error otherwise.
 //   - SingleRead:     A single read call (ReadRow, Query). Falls back to
 //     client.Single() when standalone — cheapest option.
 //   - ConsistentRead: Multiple reads that must see the same snapshot

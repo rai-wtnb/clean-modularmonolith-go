@@ -44,7 +44,7 @@ func (r *SpannerRepository) Save(ctx context.Context, user *domain.User) error {
 		},
 	}
 
-	if err := platformspanner.Write(ctx, r.client, r.logger, stmt); err != nil {
+	if err := platformspanner.Write(ctx, stmt); err != nil {
 		return fmt.Errorf("failed to save user: %w", err)
 	}
 	return nil
