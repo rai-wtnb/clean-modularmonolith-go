@@ -18,6 +18,10 @@ type readWriteTxKey struct{}
 
 // withReadWriteTx embeds a Spanner ReadWriteTransaction in the context.
 // Returns ErrNestedTransaction if a transaction already exists in the context.
+//
+// Note: The ErrNestedTransaction path is currently unreachable because
+// ReadWriteTransactionScope.Execute performs an early guard before starting
+// the Spanner round-trip. This check is retained as a defense-in-depth measure.
 func withReadWriteTx(ctx context.Context, tx *spanner.ReadWriteTransaction) (context.Context, error) {
 	if _, ok := readTransactionFromContext(ctx); ok {
 		return nil, ErrNestedTransaction
@@ -37,6 +41,11 @@ type readOnlyTxKey struct{}
 
 // withReadOnlyTx embeds a Spanner ReadOnlyTransaction in the context.
 // Returns ErrNestedTransaction if a transaction already exists in the context.
+//
+// Note: The ErrNestedTransaction path is currently unreachable because
+// ReadOnlyTransactionScope.Execute joins any existing transaction via
+// readTransactionFromContext before reaching this function.
+// This check is retained as a defense-in-depth measure.
 func withReadOnlyTx(ctx context.Context, tx *spanner.ReadOnlyTransaction) (context.Context, error) {
 	if _, ok := readTransactionFromContext(ctx); ok {
 		return nil, ErrNestedTransaction

@@ -36,6 +36,7 @@ func (s *ReadWriteTransactionScope) Execute(ctx context.Context, fn func(ctx con
 		return fn(ctx)
 	}
 	if _, ok := readOnlyTxFromContext(ctx); ok {
+		s.logger.ErrorContext(ctx, "ReadWriteTransactionScope: attempted to nest read-write transaction inside read-only scope")
 		return ErrNestedTransaction
 	}
 
