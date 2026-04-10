@@ -41,8 +41,8 @@ The implementation combines four patterns:
 │  ┌─────────────────┐                    ┌───────────────────────────┐   │
 │  │   Aggregate     │  events.Add(ctx)   │       EventBus            │   │
 │  │                 │ ─────────────────► │                           │   │
-│  │  Delete(ctx)    │  (ctx collector)   │  Publish(ctx) drains      │   │
-│  └─────────────────┘                    │  collector, dispatches    │   │
+│  │  Delete(ctx)    │  (ctx collector)   │  Publish(ctx) dispatches  │   │
+│  └─────────────────┘                    │  collected events to      │   │
 │         │                               │  pre-commit handlers      │   │
 │         │ Save()                        │            │              │   │
 │         ▼                               │            ▼              │   │
@@ -78,7 +78,7 @@ func CaptureEvents(ctx context.Context, fn func(ctx context.Context) error) ([]E
 
 // Internal (used by ScopeWithDomainEvent):
 // newContext(ctx) — initializes fresh collector
-// collect(ctx)   — drains and returns all events
+// collect(ctx)   — atomically returns and resets all events
 ```
 
 Usage in aggregate:
@@ -127,31 +127,38 @@ func (s *scopeWithDomainEventImpl) ExecuteWithPublish(ctx context.Context, fn fu
     var publishedEvents []Event
 
     innerFn := func(ctx context.Context) error {
-        // Reset on each attempt (Execute may retry).
-        publishedEvents = nil
+        if !isNested {
+            acc = &postCommitAccumulator{}       // fresh on each retry
+            ctx = contextWithAccumulator(ctx, acc)
+        } else {
+            acc, _ = accumulatorFromContext(ctx)  // reuse parent's
+        }
         ctx = newContext(ctx)
         if err := fn(ctx); err != nil {
             return err
         }
 
-        // Phase 1: Pre-commit — drain and publish events inside the transaction.
-        for evts := collect(ctx); len(evts) > 0; evts = collect(ctx) {
-            if err := s.publisher.Publish(ctx, evts); err != nil {
-                return err
-            }
-            publishedEvents = append(publishedEvents, evts...)
+        // Phase 1: Pre-commit — collect and publish events inside the transaction.
+        evts := collect(ctx)
+        if len(evts) == 0 {
+            return nil
         }
-
+        acc.add(evts)
+        if err := s.publisher.Publish(ctx, evts); err != nil {
+            return err
+        }
         return nil
     }
-    err := s.inner.Execute(ctx, innerFn)
-    if err != nil {
+    if err := s.inner.Execute(ctx, innerFn); err != nil {
         return err
     }
 
-    // Phase 2: Post-commit — fire handlers after successful commit.
-    if len(publishedEvents) > 0 && s.postCommitPublisher != nil {
-        s.postCommitPublisher.PublishPostCommit(ctx, publishedEvents)
+    // Phase 2: Post-commit — only the outermost scope fires handlers
+    // after the actual transaction commit.
+    if !isNested && s.postCommitPublisher != nil {
+        if allEvents := acc.drain(); len(allEvents) > 0 {
+            s.postCommitPublisher.PublishPostCommit(ctx, allEvents)
+        }
     }
     return nil
 }
@@ -175,7 +182,7 @@ func (r *SpannerRepository) Save(ctx context.Context, user *domain.User) error {
 
 Implements four interfaces: `events.Publisher`, `events.Subscriber`, `events.PostCommitPublisher`, and `events.PostCommitSubscriber`.
 
-**Pre-commit**: `Publish(ctx, evts)` dispatches events synchronously to registered pre-commit handlers. The **drain loop** (collecting cascading events from handlers) lives in `ScopeWithDomainEvent.ExecuteWithPublish`, not in the EventBus itself.
+**Pre-commit**: `Publish(ctx, evts)` dispatches events synchronously to registered pre-commit handlers. Each handler that needs to emit its own events must use its own `ExecuteWithPublish` scope, which joins the existing transaction and contributes events to the outermost scope's post-commit accumulator.
 
 **Post-commit**: `PublishPostCommit(ctx, evts)` dispatches events to post-commit handlers asynchronously in a separate goroutine with a detached context (not cancelled when the caller's HTTP request completes). Errors are logged but not propagated.
 
@@ -292,11 +299,11 @@ event := NewUserDeletedEvent(user.ID(), user.Email(), user.Name())
 // Handler uses event payload directly, no DB read needed
 ```
 
-### 4. Infinite Loop Prevention
+### 4. Nested Scope and Depth Protection
 
-Event handlers may publish new events (depth-first execution). The `EventBus` tracks call stack depth via context (max 10 levels by default).
+Pre-commit handlers that need to emit their own domain events must use their own `ExecuteWithPublish` scope. The nested scope joins the existing transaction and contributes its events to the outermost scope's post-commit accumulator — only the outermost scope fires `PostCommitPublish` after the actual commit.
 
-If a handler publishes an event, its handlers execute immediately (nested). If the nesting depth exceeds the limit, an `"event processing depth exceeded"` error is returned and the transaction rolls back.
+The `EventBus` tracks call stack depth via context (max 10 levels by default). If the nesting depth exceeds the limit, an `"event processing depth exceeded"` error is returned and the transaction rolls back.
 
 ## Event Handler Guidelines
 
@@ -322,7 +329,8 @@ func (h *UserDeletedHandler) Handle(ctx context.Context, event events.Event) err
         h.orderRepo.Save(ctx, order)  // Same transaction
     }
     return nil
-    // Events added by Cancel(ctx) are drained by the outer EventBus drain loop
+    // Events added by Cancel(ctx) must be published via the handler's own
+    // ExecuteWithPublish scope, which joins the outer transaction.
 }
 ```
 

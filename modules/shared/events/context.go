@@ -58,3 +58,43 @@ func CaptureEvents(ctx context.Context, fn func(ctx context.Context) error) ([]E
 	}
 	return collect(ctx), nil
 }
+
+// accumulatorKey is the context key for the shared post-commit accumulator.
+type accumulatorKey struct{}
+
+// postCommitAccumulator collects published events across all nested
+// ExecuteWithPublish scopes within a single transaction. Only the outermost
+// scope drains the accumulator for PostCommitPublish.
+type postCommitAccumulator struct {
+	mu     sync.Mutex
+	events []Event
+}
+
+func (a *postCommitAccumulator) reset() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.events = nil
+}
+
+func (a *postCommitAccumulator) add(evts []Event) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.events = append(a.events, evts...)
+}
+
+func (a *postCommitAccumulator) drain() []Event {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	evts := a.events
+	a.events = nil
+	return evts
+}
+
+func accumulatorFromContext(ctx context.Context) (*postCommitAccumulator, bool) {
+	a, ok := ctx.Value(accumulatorKey{}).(*postCommitAccumulator)
+	return a, ok
+}
+
+func newContextWithAccumulator(ctx context.Context, a *postCommitAccumulator) context.Context {
+	return context.WithValue(ctx, accumulatorKey{}, a)
+}

@@ -158,7 +158,7 @@ func (b *EventBus) PublishPostCommit(ctx context.Context, evts []events.Event) {
 	copy(copied, evts)
 
 	go func() {
-		for _, event := range copied {
+		for event := range slices.Values(copied) {
 			b.processPostCommitEvent(detachedCtx, event)
 		}
 	}()

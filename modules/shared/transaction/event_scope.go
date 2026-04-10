@@ -28,6 +28,12 @@ type ScopeWithDomainEvent interface {
 	//    updating search indices). Post-commit handler failures are logged
 	//    but do not affect the caller — delivery is best-effort.
 	//
+	// When called from within a pre-commit handler that already has an active
+	// ExecuteWithPublish scope, the nested scope joins the existing transaction
+	// and contributes its events to the outermost scope's post-commit accumulator.
+	// Only the outermost scope fires PostCommitPublish, ensuring post-commit
+	// handlers run after the actual transaction commit.
+	//
 	// NOTE: The underlying transaction may be retried (e.g. Spanner Aborted),
 	// so fn — and therefore all pre-commit handlers — can be invoked more than
 	// once per logical request. Handlers must account for this; see
