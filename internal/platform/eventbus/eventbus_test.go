@@ -120,8 +120,12 @@ func TestPostCommit_ErrorLogged_NotPropagated(t *testing.T) {
 		},
 	}
 
-	bus.SubscribePostCommit(testEventType, errHandler)
-	bus.SubscribePostCommit(testEventType, normalHandler)
+	if err := bus.SubscribePostCommit(testEventType, errHandler); err != nil {
+		t.Fatal(err)
+	}
+	if err := bus.SubscribePostCommit(testEventType, normalHandler); err != nil {
+		t.Fatal(err)
+	}
 
 	done := make(chan struct{})
 	go func() {
@@ -208,8 +212,12 @@ func TestPostCommit_HandlersRunConcurrently(t *testing.T) {
 		}
 	}
 
-	bus.SubscribePostCommit(testEventType, makeHandler("HandlerA"))
-	bus.SubscribePostCommit(testEventType, makeHandler("HandlerB"))
+	if err := bus.SubscribePostCommit(testEventType, makeHandler("HandlerA")); err != nil {
+		t.Fatal(err)
+	}
+	if err := bus.SubscribePostCommit(testEventType, makeHandler("HandlerB")); err != nil {
+		t.Fatal(err)
+	}
 
 	done := make(chan struct{})
 	go func() {
@@ -260,8 +268,12 @@ func TestPostCommit_PanicInParallel_OtherHandlerStillRuns(t *testing.T) {
 		},
 	}
 
-	bus.SubscribePostCommit(testEventType, panicHandler)
-	bus.SubscribePostCommit(testEventType, normalHandler)
+	if err := bus.SubscribePostCommit(testEventType, panicHandler); err != nil {
+		t.Fatal(err)
+	}
+	if err := bus.SubscribePostCommit(testEventType, normalHandler); err != nil {
+		t.Fatal(err)
+	}
 
 	done := make(chan struct{})
 	go func() {

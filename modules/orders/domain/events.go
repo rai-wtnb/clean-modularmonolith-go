@@ -1,15 +1,20 @@
 package domain
 
 import (
-	orderevents "github.com/rai/clean-modularmonolith-go/modules/orders/domain/events"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
 )
 
-// Internal event types (not used cross-module)
+// Domain events for the orders bounded context.
+//
+// Per ADR (domain-event placement), every DomainEvent type — including
+// cross-module ones — is defined in the publishing subdomain's domain package.
+// Handlers in other subdomains may import the event TYPE only; the event's
+// constructor stays unexported so creation is confined to this subdomain.
+
 const (
 	OrderCreatedEventType   events.EventType = "orders.OrderCreated"
 	OrderCancelledEventType events.EventType = "orders.OrderCancelled"
-	OrderSubmittedEventType                  = orderevents.OrderSubmittedEventType
+	OrderSubmittedEventType events.EventType = "orders.OrderSubmitted"
 )
 
 // OrderCreatedEvent is published when a new order is created.
@@ -19,21 +24,11 @@ type OrderCreatedEvent struct {
 	UserID  string `json:"user_id"`
 }
 
-func NewOrderCreatedEvent(order *Order) OrderCreatedEvent {
+func newOrderCreatedEvent(order *Order) OrderCreatedEvent {
 	return OrderCreatedEvent{
 		BaseEvent: events.NewBaseEvent(OrderCreatedEventType),
 		OrderID:   order.ID().String(),
 		UserID:    order.UserRef().String(),
-	}
-}
-
-func NewOrderSubmittedEvent(order *Order) orderevents.OrderSubmittedEvent {
-	return orderevents.OrderSubmittedEvent{
-		BaseEvent:   events.NewBaseEvent(OrderSubmittedEventType),
-		OrderID:     order.ID().String(),
-		UserID:      order.UserRef().String(),
-		TotalAmount: order.Total().Amount(),
-		Currency:    order.Total().Currency(),
 	}
 }
 
@@ -44,10 +39,32 @@ type OrderCancelledEvent struct {
 	UserID  string `json:"user_id"`
 }
 
-func NewOrderCancelledEvent(order *Order) OrderCancelledEvent {
+func newOrderCancelledEvent(order *Order) OrderCancelledEvent {
 	return OrderCancelledEvent{
 		BaseEvent: events.NewBaseEvent(OrderCancelledEventType),
 		OrderID:   order.ID().String(),
 		UserID:    order.UserRef().String(),
+	}
+}
+
+// OrderSubmittedEvent is published when an order is submitted.
+// This is a public domain event — event handlers in other subdomains may
+// import this type. Only the type may be referenced cross-module; the
+// constructor is unexported so events are created only within this subdomain.
+type OrderSubmittedEvent struct {
+	events.BaseEvent
+	OrderID     string
+	UserID      string
+	TotalAmount int64
+	Currency    string
+}
+
+func newOrderSubmittedEvent(order *Order) OrderSubmittedEvent {
+	return OrderSubmittedEvent{
+		BaseEvent:   events.NewBaseEvent(OrderSubmittedEventType),
+		OrderID:     order.ID().String(),
+		UserID:      order.UserRef().String(),
+		TotalAmount: order.Total().Amount(),
+		Currency:    order.Total().Currency(),
 	}
 }

@@ -32,4 +32,4 @@ go test -run TestUserCreate ./modules/users/...  # Run specific test
 
 **CQRS**: Commands use `ScopeWithDomainEvent`; queries use `transaction.Scope` (read-only) or no scope.
 
-**Module public API**: Each module exposes only `RegisterRoutes(mux *http.ServeMux)`. Cross-module communication uses domain events defined in each module's `domain/events/` sub-package (e.g., `modules/users/domain/events/`).
+**Module public API**: Each module exposes only `RegisterRoutes(mux *http.ServeMux)`. Cross-module communication uses domain events defined directly in the publishing module's `domain` package (e.g., `modules/users/domain.UserDeletedEvent`). Handlers in other modules may import the event *type* only — never another module's entities, value objects, or repositories. Event constructors stay unexported so events are created only within the publishing subdomain. See the domain-event placement ADR.

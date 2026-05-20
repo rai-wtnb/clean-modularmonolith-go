@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	orderevents "github.com/rai/clean-modularmonolith-go/modules/orders/domain/events"
+	"github.com/rai/clean-modularmonolith-go/modules/orders/domain"
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
 )
 
@@ -21,11 +21,11 @@ func NewOrderSubmittedHandler(sender *NotificationSender) *OrderSubmittedHandler
 func (h *OrderSubmittedHandler) HandlerName() string { return "OrderSubmittedHandler" }
 func (h *OrderSubmittedHandler) Subdomain() string   { return "notifications" }
 func (h *OrderSubmittedHandler) EventType() events.EventType {
-	return orderevents.OrderSubmittedEventType
+	return domain.OrderSubmittedEventType
 }
 
 func (h *OrderSubmittedHandler) Handle(ctx context.Context, event events.Event) error {
-	e, ok := event.(orderevents.OrderSubmittedEvent)
+	e, ok := event.(domain.OrderSubmittedEvent)
 	if !ok {
 		return fmt.Errorf("unexpected event type: %T", event)
 	}

@@ -85,7 +85,9 @@ func TestUser_Delete(t *testing.T) {
 func TestUser_UpdateProfile_Deleted(t *testing.T) {
 	_, err := events.CaptureEvents(context.Background(), func(ctx context.Context) error {
 		user := createTestUser(t, ctx)
-		user.Delete(ctx)
+		if err := user.Delete(ctx); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		newName, _ := domain.NewName("Jane", "Smith")
 		err := user.UpdateProfile(ctx, newName)

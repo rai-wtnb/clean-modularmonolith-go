@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events/eventstest"
-	userevents "github.com/rai/clean-modularmonolith-go/modules/users/domain/events"
 	"github.com/rai/clean-modularmonolith-go/modules/users/application/commands"
 	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 	domainmocks "github.com/rai/clean-modularmonolith-go/modules/users/domain/mocks"
@@ -36,9 +35,9 @@ func TestDeleteUserHandler_Handle_Success(t *testing.T) {
 	if len(capture.Events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(capture.Events))
 	}
-	deletedEvent, ok := capture.Events[0].(userevents.UserDeletedEvent)
+	deletedEvent, ok := capture.Events[0].(domain.UserDeletedEvent)
 	if !ok {
-		t.Fatalf("expected contracts.UserDeletedEvent, got %T", capture.Events[0])
+		t.Fatalf("expected domain.UserDeletedEvent, got %T", capture.Events[0])
 	}
 	if deletedEvent.UserID != userID.String() {
 		t.Errorf("expected event userID %s, got %s", userID, deletedEvent.UserID)

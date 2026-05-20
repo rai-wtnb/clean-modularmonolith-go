@@ -2,19 +2,20 @@ package domain
 
 import (
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
-	userevents "github.com/rai/clean-modularmonolith-go/modules/users/domain/events"
 )
 
 // Domain events for the users bounded context.
 // Events represent facts about what happened in the domain.
 //
-// Internal events (UserCreated, UserUpdated) stay within the module.
-// Cross-module events (UserDeleted) are defined in domain/events sub-package.
+// Per ADR (domain-event placement), every DomainEvent type — including
+// cross-module ones — is defined in the publishing subdomain's domain package.
+// Handlers in other subdomains may import the event TYPE only; the event's
+// constructor stays unexported so creation is confined to this subdomain.
 
 const (
 	UserCreatedEventType events.EventType = "users.UserCreated"
 	UserUpdatedEventType events.EventType = "users.UserUpdated"
-	UserDeletedEventType                  = userevents.UserDeletedEventType
+	UserDeletedEventType events.EventType = "users.UserDeleted"
 )
 
 // UserCreatedEvent is published when a new user is created.
@@ -55,8 +56,17 @@ func newUserUpdatedEvent(user *User) UserUpdatedEvent {
 	}
 }
 
-func newUserDeletedEvent(userID UserID) userevents.UserDeletedEvent {
-	return userevents.UserDeletedEvent{
+// UserDeletedEvent is published when a user is deleted.
+// This is a public domain event — event handlers in other subdomains may
+// import this type. Only the type may be referenced cross-module; the
+// constructor is unexported so events are created only within this subdomain.
+type UserDeletedEvent struct {
+	events.BaseEvent
+	UserID string
+}
+
+func newUserDeletedEvent(userID UserID) UserDeletedEvent {
+	return UserDeletedEvent{
 		BaseEvent: events.NewBaseEvent(UserDeletedEventType),
 		UserID:    userID.String(),
 	}

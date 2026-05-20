@@ -150,13 +150,13 @@ func buildRouter(usersModule users.Module, ordersModule orders.Module) http.Hand
 	// Health check endpoint
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
 	// API version prefix
 	mux.HandleFunc("GET /api/v1/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"version":"1.0.0"}`))
+		_, _ = w.Write([]byte(`{"version":"1.0.0"}`))
 	})
 
 	// Each module registers its own routes (same pattern as event subscriptions)

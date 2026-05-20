@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/rai/clean-modularmonolith-go/modules/shared/events"
-	userevents "github.com/rai/clean-modularmonolith-go/modules/users/domain/events"
+	"github.com/rai/clean-modularmonolith-go/modules/users/domain"
 )
 
 // UserDeletedHandler handles UserDeleted events by removing the user from Elasticsearch.
@@ -20,10 +20,10 @@ func NewUserDeletedHandler(indexer *UserIndexer) *UserDeletedHandler {
 
 func (h *UserDeletedHandler) HandlerName() string         { return "UserDeletedHandler" }
 func (h *UserDeletedHandler) Subdomain() string           { return "users" }
-func (h *UserDeletedHandler) EventType() events.EventType { return userevents.UserDeletedEventType }
+func (h *UserDeletedHandler) EventType() events.EventType { return domain.UserDeletedEventType }
 
 func (h *UserDeletedHandler) Handle(ctx context.Context, event events.Event) error {
-	e, ok := event.(userevents.UserDeletedEvent)
+	e, ok := event.(domain.UserDeletedEvent)
 	if !ok {
 		return fmt.Errorf("unexpected event type: %T", event)
 	}

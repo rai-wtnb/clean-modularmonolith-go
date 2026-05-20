@@ -43,7 +43,7 @@ func NewOrder(ctx context.Context, userRef UserRef) *Order {
 		createdAt: time.Now().UTC(),
 		updatedAt: time.Now().UTC(),
 	}
-	events.Add(ctx, NewOrderCreatedEvent(o))
+	events.Add(ctx, newOrderCreatedEvent(o))
 	return o
 }
 
@@ -139,7 +139,7 @@ func (o *Order) Submit(ctx context.Context) error {
 
 	o.status = StatusPending
 	o.updatedAt = time.Now().UTC()
-	events.Add(ctx, NewOrderSubmittedEvent(o))
+	events.Add(ctx, newOrderSubmittedEvent(o))
 	return nil
 }
 
@@ -166,7 +166,7 @@ func (o *Order) Cancel(ctx context.Context) error {
 
 	o.status = StatusCancelled
 	o.updatedAt = time.Now().UTC()
-	events.Add(ctx, NewOrderCancelledEvent(o))
+	events.Add(ctx, newOrderCancelledEvent(o))
 	return nil
 }
 
