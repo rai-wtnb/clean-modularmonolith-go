@@ -43,36 +43,46 @@ func Write(ctx context.Context, stmts ...spanner.Statement) error {
 	return err
 }
 
-// SingleRead executes fn with a read transaction from the context, or falls back to
-// client.Single() for a one-shot read.
-// Use this for operations that perform a single read call.
-func SingleRead[T any](ctx context.Context, client *spanner.Client, logger *slog.Logger, fn func(ctx context.Context, rtx ReadTransaction) (T, error)) (T, error) {
+// Read executes fn with a read transaction from the context, or falls back to
+// a standalone ReadOnlyTransaction for a point-in-time consistent snapshot.
+//
+// Like Write, Read defaults to joining the transaction already in the context
+// (RW preferred for read-your-writes, then RO) — participation is the normal
+// case. The name describes only the standalone strategy: when no transaction is
+// active, Read uses a ReadOnlyTransaction so multiple reads see one consistent
+// snapshot (e.g., COUNT + SELECT, or reading from multiple tables). This is the
+// safe default; use ReadOrSingle to opt into the cheaper one-shot fallback.
+func Read[T any](ctx context.Context, client *spanner.Client, logger *slog.Logger, fn func(ctx context.Context, rtx ReadTransaction) (T, error)) (T, error) {
 	if rtx, ok := readTransactionFromContext(ctx); ok {
 		return fn(ctx, rtx)
 	}
 
-	finishLog := txLog(ctx, logger, TxSingleRead, "SingleRead")
-
-	result, err := fn(ctx, client.Single())
-	finishLog(err)
-	return result, err
-}
-
-// ConsistentRead executes fn with a consistent read transaction from the context,
-// or creates a new ReadOnlyTransaction for point-in-time consistent reads.
-// Use this when performing multiple reads that must see a consistent snapshot
-// (e.g., COUNT + SELECT, or reading from multiple tables).
-func ConsistentRead[T any](ctx context.Context, client *spanner.Client, logger *slog.Logger, fn func(ctx context.Context, rtx ReadTransaction) (T, error)) (T, error) {
-	if rtx, ok := readTransactionFromContext(ctx); ok {
-		return fn(ctx, rtx)
-	}
-
-	finishLog := txLog(ctx, logger, TxReadOnly, "ConsistentRead")
+	finishLog := txLog(ctx, logger, TxReadOnly, "Read")
 
 	roTx := client.ReadOnlyTransaction()
 	defer roTx.Close()
 
 	result, err := fn(ctx, roTx)
+	finishLog(err)
+	return result, err
+}
+
+// ReadOrSingle behaves like Read but, when standalone, falls back to
+// client.Single() — a one-shot read — instead of a multi-read snapshot.
+//
+// Like Read, it defaults to joining the transaction already in the context
+// (RW preferred, then RO). The name describes only the standalone strategy:
+// use ReadOrSingle when the operation performs a single read call (ReadRow,
+// Query) and does not need a consistent snapshot across multiple reads; it is
+// the cheapest option. Prefer Read when in doubt.
+func ReadOrSingle[T any](ctx context.Context, client *spanner.Client, logger *slog.Logger, fn func(ctx context.Context, rtx ReadTransaction) (T, error)) (T, error) {
+	if rtx, ok := readTransactionFromContext(ctx); ok {
+		return fn(ctx, rtx)
+	}
+
+	finishLog := txLog(ctx, logger, TxSingleRead, "ReadOrSingle")
+
+	result, err := fn(ctx, client.Single())
 	finishLog(err)
 	return result, err
 }

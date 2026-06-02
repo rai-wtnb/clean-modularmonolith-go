@@ -58,7 +58,7 @@ const (
 
 // txLog logs "transaction starting" and returns a function to log the outcome.
 // It uses businessCaller() to find the first frame outside infrastructure packages,
-// so it works correctly from both Scope.Execute and standalone functions (Write/SingleRead/ConsistentRead).
+// so it works correctly from both Scope.Execute and standalone functions (Write/Read/ReadOrSingle).
 func txLog(ctx context.Context, logger *slog.Logger, txType transactionType, op string) (finishLog func(error)) {
 	var b [4]byte
 	_, _ = rand.Read(b[:])
