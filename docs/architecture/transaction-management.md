@@ -18,7 +18,7 @@ The decision was made to remove this fallback and require all writes to go throu
 
 ### Read operations work both inside and outside a scope
 
-`SingleRead` and `ConsistentRead` join an existing transaction if one is active, or create a standalone read transaction otherwise. This is safe because standalone reads return a point-in-time snapshot with no data integrity risk.
+`Read` and `ReadOrSingle` join an existing transaction if one is active, or create a standalone read transaction otherwise. Like `Write`, joining the ambient transaction is the default — the names describe only the standalone fallback strategy (`Read` → consistent snapshot, `ReadOrSingle` → one-shot read). This is safe because standalone reads return a point-in-time snapshot with no data integrity risk.
 
 ## Architecture
 
@@ -31,7 +31,7 @@ Application Layer          transaction.Scope (port)
     v
 Infrastructure Layer       ReadWriteTransactionScope (adapter)
                            ReadOnlyTransactionScope (adapter)
-                           Write, SingleRead, ConsistentRead (helpers)
+                           Write, Read, ReadOrSingle (helpers)
 ```
 
 - **Port** (`modules/shared/transaction/`): `Scope` and `ScopeWithDomainEvent` interfaces. Application layer depends on these.
@@ -51,7 +51,7 @@ Command Handler
                    |    +-> Write(ctx, stmts...)
                    |         +-> readWriteTxFromContext(ctx) -> joins tx
                    |-- repo.FindByID(ctx, id)
-                   |    +-> SingleRead(ctx, ...) -> joins tx (read-your-writes)
+                   |    +-> ReadOrSingle(ctx, ...) -> joins tx (read-your-writes)
                    +-> events.Add(ctx, event)
                         +-> Collected, published pre-commit
 ```
@@ -71,7 +71,7 @@ Extraction functions:
 |----------|--------|---------|
 | `readWriteTxFromContext` | RW key only | `Write` |
 | `readOnlyTxFromContext` | RO key only | `Write` (guard), `ReadWriteTransactionScope` (guard) |
-| `readTransactionFromContext` | RW first, then RO | `SingleRead`, `ConsistentRead` |
+| `readTransactionFromContext` | RW first, then RO | `Read`, `ReadOrSingle` |
 
 `readTransactionFromContext` checks RW before RO so that reads within a write transaction get read-your-writes consistency.
 
@@ -108,23 +108,27 @@ func Write(ctx context.Context, stmts ...spanner.Statement) error
 
 Single statement uses `tx.Update`; multiple statements use `tx.BatchUpdate` (single RPC).
 
-### SingleRead (REQUIRED propagation)
+### Read (REQUIRED propagation)
 
 ```go
-func SingleRead[T any](ctx context.Context, client *spanner.Client, logger *slog.Logger, fn func(ctx context.Context, rtx ReadTransaction) (T, error)) (T, error)
+func Read[T any](ctx context.Context, client *spanner.Client, logger *slog.Logger, fn func(ctx context.Context, rtx ReadTransaction) (T, error)) (T, error)
 ```
 
-- Any tx in context: joins it
-- No tx in context: falls back to `client.Single()` (cheapest one-shot read)
-
-### ConsistentRead (REQUIRED propagation)
-
-```go
-func ConsistentRead[T any](ctx context.Context, client *spanner.Client, logger *slog.Logger, fn func(ctx context.Context, rtx ReadTransaction) (T, error)) (T, error)
-```
+The default read helper. Prefer this when in doubt.
 
 - Any tx in context: joins it
 - No tx in context: creates a `ReadOnlyTransaction` for snapshot consistency
+
+### ReadOrSingle (REQUIRED propagation)
+
+```go
+func ReadOrSingle[T any](ctx context.Context, client *spanner.Client, logger *slog.Logger, fn func(ctx context.Context, rtx ReadTransaction) (T, error)) (T, error)
+```
+
+Behaves like `Read`, but opts into a cheaper one-shot fallback when standalone.
+
+- Any tx in context: joins it
+- No tx in context: falls back to `client.Single()` (cheapest one-shot read)
 
 ## CQRS Transaction Patterns
 
@@ -153,9 +157,9 @@ func (h *ListUsersHandler) Handle(ctx context.Context, query ListUsersQuery) (*U
     })
 }
 
-// Single read -> no scope needed (SingleRead falls back to client.Single())
+// Single read -> no scope needed (ReadOrSingle falls back to client.Single())
 func (h *GetUserHandler) Handle(ctx context.Context, query GetUserQuery) (*UserDTO, error) {
-    user, err := h.repo.FindByID(ctx, query.ID) // SingleRead creates its own one-shot read
+    user, err := h.repo.FindByID(ctx, query.ID) // ReadOrSingle creates its own one-shot read
     return toDTO(user), err
 }
 ```

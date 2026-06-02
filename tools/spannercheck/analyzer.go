@@ -32,8 +32,8 @@ type methodKey struct {
 
 var forbiddenMethods = map[methodKey]string{
 	{"Client", "Apply"}:                     "use platformspanner.Write",
-	{"Client", "Single"}:                    "use platformspanner.SingleRead",
-	{"Client", "ReadOnlyTransaction"}:       "use platformspanner.ConsistentRead",
+	{"Client", "Single"}:                    "use platformspanner.ReadOrSingle",
+	{"Client", "ReadOnlyTransaction"}:       "use platformspanner.Read",
 	{"Client", "ReadWriteTransaction"}:      "use platformspanner.Write",
 	{"ReadWriteTransaction", "BufferWrite"}: "use DML via platformspanner.Write",
 }

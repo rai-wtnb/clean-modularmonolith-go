@@ -7,16 +7,16 @@ import (
 	cloudspanner "cloud.google.com/go/spanner"
 )
 
-func Write(ctx context.Context, client *cloudspanner.Client, logger *slog.Logger, stmts ...cloudspanner.Statement) error {
+func Write(ctx context.Context, stmts ...cloudspanner.Statement) error {
 	return nil
 }
 
-func SingleRead[T any](ctx context.Context, client *cloudspanner.Client, logger *slog.Logger, fn func(context.Context, interface{}) (T, error)) (T, error) {
+func ReadOrSingle[T any](ctx context.Context, client *cloudspanner.Client, logger *slog.Logger, fn func(context.Context, interface{}) (T, error)) (T, error) {
 	var zero T
 	return zero, nil
 }
 
-func ConsistentRead[T any](ctx context.Context, client *cloudspanner.Client, logger *slog.Logger, fn func(context.Context, interface{}) (T, error)) (T, error) {
+func Read[T any](ctx context.Context, client *cloudspanner.Client, logger *slog.Logger, fn func(context.Context, interface{}) (T, error)) (T, error) {
 	var zero T
 	return zero, nil
 }
